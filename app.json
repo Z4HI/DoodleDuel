@@ -1,0 +1,64 @@
+{
+  "expo": {
+    "name": "doodle_duel",
+    "slug": "doodle_duel",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "doodleduel",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.z4hi.doodleduel",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": [
+          "remote-notification",
+          "remote-notification"
+        ]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "backgroundColor": "#000000"
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "9e7006c8-cbf4-4c72-835e-70744ff4b388"
+      },
+      "supabaseUrl": "https://qxqduzzqcivosdauqpis.supabase.co",
+      "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4cWR1enpxY2l2b3NkYXVxcGlzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkwNDk5MTUsImV4cCI6MjA3NDYyNTkxNX0.8OX3YsYJu9jx3CpmrllQraN5P6R06SCsKcg3-2PG8jY",
+      "googleIosClientId": "693976680551-u7chuhpmu8n6etgr17aktedrhf93boug.apps.googleusercontent.com",
+      "googleWebClientId": "693976680551-t4qqfhhjlsvvlj2l1hpjh38r3ukarua1.apps.googleusercontent.com"
+    },
+    "owner": "z4hi"
+  }
+}
