@@ -15,8 +15,18 @@ export default function Login() {
         
         {/* Google Sign In */}
         <GoogleSignIn 
-          onSignInSuccess={() => console.log('Google sign in successful')}
-          onSignInError={(error) => Alert.alert('Error', error.message)}
+          onSignInSuccess={(user) => {
+            console.log('✅ Login: Google sign in successful');
+          }}
+          onSignInError={(error) => {
+            console.error('❌ Login: Google sign in error:', error);
+            console.error('❌ Login: Error details:', {
+              message: error?.message,
+              code: error?.code,
+              status: error?.status
+            });
+            Alert.alert('Google Sign-In Error', error?.message || 'Unknown error occurred');
+          }}
         />
 
         {/* Apple Sign In */}

@@ -2,14 +2,25 @@ import { Ionicons } from '@expo/vector-icons';
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
-import { Session } from '@supabase/supabase-js';
 import { StatusBar } from "expo-status-bar";
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import LoginScreen from '../AUTH/login';
+import { useNotificationNavigation } from '../NOTIFICATIONS/useNotificationNavigation';
+import DatabaseConnectionTest from '../SCREENS/DatabaseConnectionTest';
+import DatabaseTestScreen from '../SCREENS/DatabaseTestScreen';
+import DuelFriendScreen from '../SCREENS/DuelFriendScreen';
 import HomeScreen from '../SCREENS/HomeScreen';
+import MyDrawingsScreen from '../SCREENS/MyDrawingsScreen';
+import SimpleSignInTest from '../SCREENS/SimpleSignInTest';
+import TestNavigationScreen from '../SCREENS/TestNavigationScreen';
+import UserCheckScreen from '../SCREENS/UserCheckScreen';
+import UsernameScreen from '../SCREENS/UsernameScreen';
+import WordOfTheDayScreen from '../SCREENS/WordOfTheDayScreen';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { authService } from '../store/services/authService';
 import { supabase } from '../SUPABASE/supabaseConfig';
 
 const Stack = createStackNavigator();
@@ -54,49 +65,69 @@ function MainTabNavigator() {
 }
 
 function AuthNavigator() {
-  const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const dispatch = useAppDispatch();
+  const { user: session, userInfo, loading } = useAppSelector((state) => state.auth);
+  
+  // Handle notification navigation
+  useNotificationNavigation();
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setLoading(false);
-    });
+    // Initialize auth
+    dispatch(authService.initializeAuth());
 
     // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      dispatch(authService.handleAuthStateChange(event, session));
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [dispatch]);
 
   if (loading) {
     return <LoadingScreen />;
   }
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      {session ? (
-        <Stack.Screen name="MainApp" component={MainTabNavigator} />
-      ) : (
-        <Stack.Screen name="Login" component={LoginScreen} />
-      )}
-    </Stack.Navigator>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <Stack.Navigator 
+        screenOptions={{ 
+          headerShown: false,
+          gestureEnabled: false 
+        }}
+      >
+        {session ? (
+          <>
+            <Stack.Screen 
+              name="UserCheck" 
+              component={UserCheckScreen}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen name="MainTabs" component={MainTabNavigator} />
+            <Stack.Screen name="WordOfTheDay" component={WordOfTheDayScreen} />
+            <Stack.Screen name="DuelFriend" component={DuelFriendScreen} />
+            <Stack.Screen name="MyDrawings" component={MyDrawingsScreen} />
+            <Stack.Screen name="Username" component={UsernameScreen} />
+            <Stack.Screen name="DatabaseTest" component={DatabaseTestScreen} />
+            <Stack.Screen name="TestNavigation" component={TestNavigationScreen} />
+            <Stack.Screen name="SimpleSignInTest" component={SimpleSignInTest} />
+            <Stack.Screen name="DatabaseConnectionTest" component={DatabaseConnectionTest} />
+          </>
+        ) : (
+          <Stack.Screen name="Login" component={LoginScreen} />
+        )}
+      </Stack.Navigator>
+    </GestureHandlerRootView>
   );
 }
 
 export default function RootNavigator() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <StatusBar style="auto" />
-        <NavigationContainer>
-          <AuthNavigator />
-        </NavigationContainer>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
+    <SafeAreaProvider>
+      <StatusBar style="auto" />
+      <NavigationContainer>
+        <AuthNavigator />
+      </NavigationContainer>
+    </SafeAreaProvider>
   );
 }
 

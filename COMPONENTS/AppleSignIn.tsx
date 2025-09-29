@@ -1,6 +1,6 @@
 import * as AppleAuthentication from 'expo-apple-authentication';
 import React from 'react';
-import { Platform, StyleSheet, TouchableOpacity } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 import { supabase } from '../SUPABASE/supabaseConfig';
 
 interface AppleSignInProps {
@@ -61,40 +61,30 @@ export function AppleSignIn({ onSignInSuccess, onSignInError }: AppleSignInProps
   }
 
   return (
-    <TouchableOpacity
-      onPress={handleAppleSignIn}
-      style={styles.appleButton}
-    >
+    <View style={styles.appleButtonContainer}>
       <AppleAuthentication.AppleAuthenticationButton
         buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
         buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
         cornerRadius={12}
-        style={styles.appleButtonInner}
+        style={styles.appleButton}
         onPress={handleAppleSignIn}
       />
-    </TouchableOpacity>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  appleButton: {
-    width: 288,
-    backgroundColor: 'white',
-    borderRadius: 12,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.2,
-    shadowRadius: 5,
-    elevation: 5,
-  },
-  appleButtonInner: {
-    width: 256,
+  appleButtonContainer: {
+    width: '100%',
     height: 48,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#000000',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  appleButton: {
+    width: '100%',
+    height: '100%',
   },
 });

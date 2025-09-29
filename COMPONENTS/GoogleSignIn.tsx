@@ -30,18 +30,25 @@ export function GoogleSignIn({ onSignInSuccess, onSignInError }: GoogleSignInPro
   }, [response]);
 
   const signInWithGoogle = async (token: string) => {
+    console.log('🔍 Google sign-in started...');
     try {
+      console.log('🔍 Attempting Supabase auth with Google token...');
       const { error, data } = await supabase.auth.signInWithIdToken({
         provider: 'google',
         token,
       });
       
+      console.log('🔍 Supabase auth result:', { error, data });
+      
       if (!error && data.user) {
+        console.log('✅ Google sign-in successful, user:', data.user.id);
         onSignInSuccess?.(data.user);
       } else {
+        console.error('❌ Google sign-in failed:', error);
         onSignInError?.(error);
       }
     } catch (error) {
+      console.error('❌ Google sign-in exception:', error);
       onSignInError?.(error);
     }
   };
