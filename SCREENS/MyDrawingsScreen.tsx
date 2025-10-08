@@ -25,64 +25,36 @@ export default function MyDrawingsScreen() {
     fetchDrawings();
   }, []);
 
-  const fetchDrawings = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        Alert.alert('Error', 'You must be logged in to view your drawings.');
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from('drawings')
-        .select('id, word, svg_url, created_at, score, message')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error('Error fetching drawings:', error);
-        Alert.alert('Error', 'Failed to load your drawings.');
-        return;
-      }
-
-      // Fetch SVG content for each drawing
-      const drawingsWithContent = await Promise.all(
-        (data || []).map(async (drawing) => {
-          try {
-            const response = await fetch(drawing.svg_url);
-            const svgContent = await response.text();
-            return {
-              ...drawing,
-              svg_content: svgContent
-            };
-          } catch (error) {
-            console.error('Error fetching SVG content:', error);
-            return {
-              ...drawing,
-              svg_content: ''
-            };
-          }
-        })
-      );
-
-      setDrawings(drawingsWithContent);
-    } catch (error) {
-      console.error('Error fetching drawings:', error);
-      Alert.alert('Error', 'Something went wrong while loading your drawings.');
-    } finally {
-      setLoading(false);
+  const parseSVGPaths = (svgContent: string) => {
+    if (!svgContent || typeof svgContent !== 'string') {
+      return { paths: [], viewBox: '0 0 100% 100%' };
     }
-  };
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+    
+    try {
+      // Extract viewBox from SVG
+      const viewBoxMatch = svgContent.match(/viewBox="([^"]*)"/);
+      const viewBox = viewBoxMatch ? viewBoxMatch[1] : '0 0 100% 100%';
+      
+      // Extract path elements from SVG content - more flexible regex
+      const pathRegex = /<path[^>]*d="([^"]*)"[^>]*(?:stroke="([^"]*)")?[^>]*(?:stroke-width="([^"]*)")?[^>]*\/>/g;
+      const paths: Array<{d: string, stroke: string, strokeWidth: number}> = [];
+      let match;
+      
+      while ((match = pathRegex.exec(svgContent)) !== null) {
+        if (match[1]) { // d attribute is required
+          paths.push({
+            d: match[1],
+            stroke: match[2] || '#000000', // default to black
+            strokeWidth: parseFloat(match[3]) || 3 // default to 3
+          });
+        }
+      }
+      
+      return { paths, viewBox };
+    } catch (error) {
+      console.error('Error parsing SVG:', error);
+      return { paths: [], viewBox: '0 0 100% 100%' };
+    }
   };
 
   const deleteDrawing = async (drawingId: string, svgUrl: string) => {
@@ -125,7 +97,7 @@ export default function MyDrawingsScreen() {
   const handleDeleteDrawing = (drawing: Drawing) => {
     Alert.alert(
       'Delete Drawing',
-      `Are you sure you want to delete your drawing of "${drawing.word}"?`,
+      `Are you sure you want to delete your drawing of "${String(drawing.word || 'unknown')}"?`,
       [
         {
           text: 'Cancel',
@@ -138,34 +110,6 @@ export default function MyDrawingsScreen() {
         },
       ]
     );
-  };
-
-  const parseSVGPaths = (svgContent: string) => {
-    if (!svgContent) return { paths: [], viewBox: '0 0 100% 100%' };
-    
-    try {
-      // Extract viewBox from SVG
-      const viewBoxMatch = svgContent.match(/viewBox="([^"]*)"/);
-      const viewBox = viewBoxMatch ? viewBoxMatch[1] : '0 0 100% 100%';
-      
-      // Extract path elements from SVG content
-      const pathRegex = /<path[^>]*d="([^"]*)"[^>]*stroke="([^"]*)"[^>]*stroke-width="([^"]*)"[^>]*\/>/g;
-      const paths = [];
-      let match;
-      
-      while ((match = pathRegex.exec(svgContent)) !== null) {
-        paths.push({
-          d: match[1],
-          stroke: match[2],
-          strokeWidth: parseFloat(match[3]) || 3
-        });
-      }
-      
-      return { paths, viewBox };
-    } catch (error) {
-      console.error('Error parsing SVG:', error);
-      return { paths: [], viewBox: '0 0 100% 100%' };
-    }
   };
 
   const renderRightActions = (item: Drawing) => {
@@ -187,64 +131,109 @@ export default function MyDrawingsScreen() {
     );
   };
 
-  const SwipeableDrawingCard = ({ item }: { item: Drawing }) => {
-    const { paths, viewBox } = parseSVGPaths(item.svg_content);
-
+  const renderDrawingItem = ({ item }: { item: Drawing }) => {
+    const { paths } = parseSVGPaths(item.svg_content || '');
+    
     return (
-      <View style={styles.swipeableContainer}>
-        <Swipeable
-          renderRightActions={() => renderRightActions(item)}
-          rightThreshold={40}
-        >
-          <View style={styles.drawingCard}>
-            <View style={styles.cardContent}>
-              <View style={styles.textContent}>
-                <View style={styles.drawingHeader}>
-                  <Text style={styles.wordText}>{item.word.toUpperCase()}</Text>
-                  <Text style={styles.dateText}>{formatDate(item.created_at)}</Text>
-                </View>
-                
-              {item.score && (
-                <View style={styles.scoreContainer}>
-                  <Text style={styles.scoreText}>Score: {item.score}%</Text>
-                  {item.message && (
-                    <Text style={styles.messageText}>{item.message}</Text>
-                  )}
+      <Swipeable
+        renderRightActions={() => renderRightActions(item)}
+        rightThreshold={40}
+      >
+        <View style={styles.drawingCard}>
+          <View style={styles.cardContent}>
+            <View style={styles.textContent}>
+              <Text style={styles.wordText}>{String(item.word || 'Unknown')}</Text>
+              <Text style={styles.dateText}>{String(item.created_at || 'Unknown date')}</Text>
+              {item.score !== undefined && item.score !== null && (
+                <Text style={styles.scoreText}>Score: {String(item.score)}%</Text>
+              )}
+              {item.message && (
+                <Text style={styles.messageText}>{String(item.message)}</Text>
+              )}
+            </View>
+            
+            <View style={styles.svgContainer}>
+              {paths.length > 0 ? (
+                <Svg style={styles.svg} viewBox="0 0 300 300" preserveAspectRatio="xMidYMid meet">
+                  {paths.map((path, pathIndex) => (
+                    <Path
+                      key={pathIndex}
+                      d={path.d}
+                      stroke={path.stroke}
+                      strokeWidth={Math.max(1, path.strokeWidth * 0.8)}
+                      fill="none"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  ))}
+                </Svg>
+              ) : (
+                <View style={styles.svgPlaceholder}>
+                  <Text style={styles.placeholderText}>🎨</Text>
+                  <Text style={styles.placeholderSubtext}>No drawing</Text>
                 </View>
               )}
-              </View>
-              
-              <View style={styles.svgContainer}>
-                {paths.length > 0 ? (
-                  <Svg style={styles.svg} viewBox="50 0 300 400" preserveAspectRatio="xMidYMid meet">
-                    {paths.map((path, index) => (
-                      <Path
-                        key={index}
-                        d={path.d}
-                        stroke={path.stroke}
-                        strokeWidth={Math.max(1, path.strokeWidth * 0.8)}
-                        fill="none"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    ))}
-                  </Svg>
-                ) : (
-                  <View style={styles.svgPlaceholder}>
-                    <Text style={styles.placeholderText}>🎨</Text>
-                    <Text style={styles.loadingText}>Loading...</Text>
-                  </View>
-                )}
-              </View>
             </View>
           </View>
-        </Swipeable>
-      </View>
+        </View>
+      </Swipeable>
     );
   };
 
-  const renderDrawing = ({ item }: { item: Drawing }) => {
-    return <SwipeableDrawingCard item={item} />;
+  const fetchDrawings = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        Alert.alert('Error', 'You must be logged in to view your drawings.');
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('drawings')
+        .select('id, word, svg_url, created_at, score, message')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching drawings:', error);
+        Alert.alert('Error', 'Failed to load your drawings.');
+        return;
+      }
+
+      // Fetch SVG content for each drawing
+      const drawingsWithContent = await Promise.all(
+        (data || []).map(async (drawing) => {
+          try {
+            // Validate drawing object
+            if (!drawing || !drawing.id || !drawing.word) {
+              return null;
+            }
+
+            const response = await fetch(drawing.svg_url);
+            const svgContent = await response.text();
+            return {
+              ...drawing,
+              svg_content: svgContent || ''
+            };
+          } catch (error) {
+            console.error('Error fetching SVG content for drawing:', drawing.id, error);
+            return {
+              ...drawing,
+              svg_content: ''
+            };
+          }
+        })
+      );
+
+      // Filter out any null entries
+      const validDrawings = drawingsWithContent.filter(drawing => drawing !== null);
+      setDrawings(validDrawings);
+    } catch (error) {
+      console.error('Error fetching drawings:', error);
+      Alert.alert('Error', 'Something went wrong while loading your drawings.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (loading) {
@@ -288,10 +277,13 @@ export default function MyDrawingsScreen() {
       ) : (
         <FlatList
           data={drawings}
-          renderItem={renderDrawing}
-          keyExtractor={(item) => item.id}
+          renderItem={renderDrawingItem}
+          keyExtractor={(item) => String(item.id || 'unknown')}
           contentContainerStyle={styles.listContainer}
           showsVerticalScrollIndicator={false}
+          ListHeaderComponent={() => (
+            <Text style={styles.debugText}>Found {drawings.length} drawings</Text>
+          )}
         />
       )}
     </SafeAreaView>
@@ -329,15 +321,6 @@ const styles = StyleSheet.create({
     color: '#333',
     flex: 1,
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    fontSize: 16,
-    color: '#666',
-  },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -358,6 +341,15 @@ const styles = StyleSheet.create({
     marginBottom: 30,
     lineHeight: 22,
   },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+  },
   drawButton: {
     backgroundColor: '#34C759',
     borderRadius: 8,
@@ -373,37 +365,27 @@ const styles = StyleSheet.create({
   listContainer: {
     padding: 20,
   },
-  swipeableContainer: {
-    marginBottom: 16,
+  debugText: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 10,
+    textAlign: 'center',
   },
   drawingCard: {
     backgroundColor: '#f8f9fa',
     borderRadius: 12,
     padding: 16,
+    marginBottom: 16,
     borderWidth: 1,
     borderColor: '#e9ecef',
-    zIndex: 1,
   },
   cardContent: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
   textContent: {
     flex: 1,
     marginRight: 16,
-  },
-  drawingHeader: {
-    marginBottom: 8,
-  },
-  wordText: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#007AFF',
-    marginBottom: 4,
-  },
-  dateText: {
-    fontSize: 12,
-    color: '#666',
   },
   svgContainer: {
     backgroundColor: '#fff',
@@ -430,35 +412,42 @@ const styles = StyleSheet.create({
     fontSize: 24,
     marginBottom: 4,
   },
-  loadingText: {
+  placeholderSubtext: {
     fontSize: 10,
     color: '#666',
   },
-  scoreContainer: {
-    backgroundColor: '#e8f5e8',
-    borderRadius: 6,
-    padding: 6,
-    alignItems: 'center',
-    marginTop: 8,
+  wordText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#007AFF',
+    marginBottom: 4,
+  },
+  dateText: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 8,
   },
   scoreText: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '600',
     color: '#34C759',
   },
   messageText: {
-    fontSize: 11,
+    fontSize: 12,
     color: '#666',
     fontStyle: 'italic',
-    textAlign: 'center',
     marginTop: 4,
+    lineHeight: 16,
   },
   deleteButton: {
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#ff4444',
     justifyContent: 'center',
     alignItems: 'center',
-    width: 60,
-    height: '100%',
-    borderRadius: 12,
+    width: 70,
+    height: '90%',
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 16,
   },
 });

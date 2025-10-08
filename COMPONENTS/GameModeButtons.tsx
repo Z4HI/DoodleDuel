@@ -6,6 +6,7 @@ interface GameModeButtonsProps {
   onWordOfTheDay?: () => void;
   onMultiplayer?: () => void;
   onDuelFriend?: () => void;
+  onDoodleHunt?: () => void;
   onPractice?: () => void;
 }
 
@@ -13,6 +14,7 @@ export function GameModeButtons({
   onWordOfTheDay, 
   onMultiplayer, 
   onDuelFriend, 
+  onDoodleHunt,
   onPractice 
 }: GameModeButtonsProps) {
   return (
@@ -25,7 +27,7 @@ export function GameModeButtons({
         <View style={styles.buttonContent}>
           <Ionicons name="gift" size={24} color="#FF6B6B" />
           <View style={styles.textContainer}>
-            <Text style={styles.buttonTitle}>Word of the Day</Text>
+            <Text style={styles.buttonTitle}>Doodle of the Day</Text>
             <Text style={styles.buttonSubtitle}>🎁 (solo daily challenge)</Text>
           </View>
         </View>
@@ -39,7 +41,7 @@ export function GameModeButtons({
         <View style={styles.buttonContent}>
           <Ionicons name="flash" size={24} color="#4ECDC4" />
           <View style={styles.textContainer}>
-            <Text style={styles.buttonTitle}>Multiplayer Matchmaking</Text>
+            <Text style={styles.buttonTitle}>Doodle Duel Multiplayer</Text>
             <Text style={styles.buttonSubtitle}>⚡ (random opponents)</Text>
           </View>
         </View>
@@ -53,8 +55,22 @@ export function GameModeButtons({
         <View style={styles.buttonContent}>
           <Ionicons name="people" size={24} color="#45B7D1" />
           <View style={styles.textContainer}>
-            <Text style={styles.buttonTitle}>Duel a Friend</Text>
+            <Text style={styles.buttonTitle}>Doodle Duel a Friend</Text>
             <Text style={styles.buttonSubtitle}>👥 (invite or challenge)</Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+
+      {/* Doodle Hunt */}
+      <TouchableOpacity 
+        style={[styles.button, styles.doodleHuntButton]} 
+        onPress={onDoodleHunt}
+      >
+        <View style={styles.buttonContent}>
+          <Ionicons name="search" size={24} color="#FF6B35" />
+          <View style={styles.textContainer}>
+            <Text style={styles.buttonTitle}>Doodle Hunt</Text>
+            <Text style={styles.buttonSubtitle}>🔍 (draw & guess word)</Text>
           </View>
         </View>
       </TouchableOpacity>
@@ -127,6 +143,10 @@ const styles = StyleSheet.create({
   duelFriendButton: {
     borderLeftWidth: 4,
     borderLeftColor: '#45B7D1',
+  },
+  doodleHuntButton: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF6B35',
   },
   practiceButton: {
     borderLeftWidth: 4,

@@ -27,7 +27,7 @@ export const authService = {
     try {
       const { data: profile, error } = await supabase
         .from('profiles')
-        .select('username, email')
+        .select('username, email, game_tokens')
         .eq('id', session.user.id)
         .maybeSingle(); // Use maybeSingle() instead of single() to handle no results
 
@@ -35,7 +35,8 @@ export const authService = {
         console.error('Error fetching profile:', error);
         dispatch(setUserInfo({
           username: 'No username',
-          email: session.user.email || 'No email'
+          email: session.user.email || 'No email',
+          game_tokens: 0
         }));
         return;
       }
@@ -47,7 +48,7 @@ export const authService = {
         // First check if profile exists (in case of race condition)
         const { data: existingProfile } = await supabase
           .from('profiles')
-          .select('username, email')
+          .select('username, email, game_tokens')
           .eq('id', session.user.id)
           .maybeSingle();
 
@@ -55,7 +56,8 @@ export const authService = {
           // Profile exists, use it
           const userInfo = {
             username: existingProfile?.username || 'No username',
-            email: existingProfile?.email || session.user.email || 'No email'
+            email: existingProfile?.email || session.user.email || 'No email',
+            game_tokens: existingProfile?.game_tokens || 0
           };
           dispatch(setUserInfo(userInfo));
           return;
@@ -82,14 +84,15 @@ export const authService = {
             console.log('Profile already exists, fetching it...');
             const { data: existingProfile } = await supabase
               .from('profiles')
-              .select('username, email')
+              .select('username, email, game_tokens')
               .eq('id', session.user.id)
               .maybeSingle();
 
             if (existingProfile) {
               const userInfo = {
                 username: existingProfile?.username || 'No username',
-                email: existingProfile?.email || session.user.email || 'No email'
+                email: existingProfile?.email || session.user.email || 'No email',
+                game_tokens: existingProfile?.game_tokens || 0
               };
               dispatch(setUserInfo(userInfo));
               return;
@@ -99,7 +102,8 @@ export const authService = {
           // Set fallback user info even if creation failed
           dispatch(setUserInfo({
             username: 'No username',
-            email: session.user.email || 'No email'
+            email: session.user.email || 'No email',
+            game_tokens: 0
           }));
           return;
         }
@@ -107,21 +111,23 @@ export const authService = {
         // After creating profile, fetch it again to get the updated data
         const { data: newProfile } = await supabase
           .from('profiles')
-          .select('username, email')
+          .select('username, email, game_tokens')
           .eq('id', session.user.id)
           .maybeSingle();
 
         if (newProfile) {
           const userInfo = {
             username: newProfile?.username || 'No username',
-            email: newProfile?.email || session.user.email || 'No email'
+            email: newProfile?.email || session.user.email || 'No email',
+            game_tokens: newProfile?.game_tokens || 0
           };
           dispatch(setUserInfo(userInfo));
         } else {
           // Set fallback user info
           dispatch(setUserInfo({
             username: 'No username',
-            email: session.user.email || 'No email'
+            email: session.user.email || 'No email',
+            game_tokens: 0
           }));
         }
         return;
@@ -129,7 +135,8 @@ export const authService = {
 
       const userInfo = {
         username: profile?.username || 'No username',
-        email: profile?.email || session.user.email || 'No email'
+        email: profile?.email || session.user.email || 'No email',
+        game_tokens: profile?.game_tokens || 0
       };
       
       dispatch(setUserInfo(userInfo));
@@ -137,7 +144,8 @@ export const authService = {
       console.error('Error fetching user info:', error);
       dispatch(setUserInfo({
         username: 'No username',
-        email: session.user.email || 'No email'
+        email: session.user.email || 'No email',
+        game_tokens: 0
       }));
     }
   },
@@ -171,5 +179,61 @@ export const authService = {
   // Clear error
   clearError: () => (dispatch: AppDispatch) => {
     dispatch(setError(null));
+  },
+
+  // Update user tokens
+  updateUserTokens: (tokenIncrement: number) => async (dispatch: AppDispatch) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        console.error('No user found for token update');
+        return;
+      }
+
+      // Get current tokens
+      const { data: currentProfile, error: fetchError } = await supabase
+        .from('profiles')
+        .select('game_tokens')
+        .eq('id', user.id)
+        .single();
+
+      if (fetchError) {
+        console.error('Error fetching current tokens:', fetchError);
+        return;
+      }
+
+      const currentTokens = currentProfile?.game_tokens || 0;
+      const newTokens = currentTokens + tokenIncrement;
+
+      // Update tokens in database
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update({ game_tokens: newTokens })
+        .eq('id', user.id);
+
+      if (updateError) {
+        console.error('Error updating tokens:', updateError);
+        return;
+      }
+
+      // Update local state
+      const { data: updatedProfile } = await supabase
+        .from('profiles')
+        .select('username, email, game_tokens')
+        .eq('id', user.id)
+        .single();
+
+      if (updatedProfile) {
+        dispatch(setUserInfo({
+          username: updatedProfile.username,
+          email: updatedProfile.email,
+          game_tokens: updatedProfile.game_tokens
+        }));
+      }
+
+      console.log(`✅ Tokens updated: ${currentTokens} + ${tokenIncrement} = ${newTokens}`);
+    } catch (error) {
+      console.error('Error updating user tokens:', error);
+    }
   }
 };

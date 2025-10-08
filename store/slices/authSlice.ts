@@ -4,6 +4,7 @@ import { Session } from '@supabase/supabase-js';
 interface UserInfo {
   username: string;
   email: string;
+  game_tokens?: number;
 }
 
 interface AuthState {

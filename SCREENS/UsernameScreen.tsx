@@ -76,7 +76,7 @@ export default function UsernameScreen() {
       }
 
       // Navigate to home screen
-      navigation.navigate('MainTabs' as never);
+      navigation.navigate('Home' as never);
       
     } catch (error) {
       console.error('Error creating username:', error);

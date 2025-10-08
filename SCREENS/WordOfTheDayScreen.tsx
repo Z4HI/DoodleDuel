@@ -1,19 +1,25 @@
 import { useNavigation } from '@react-navigation/native';
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Dimensions, PanResponder, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
-import { captureRef } from 'react-native-view-shot';
+import { useRewardedAd } from '../COMPONENTS/RewardedAd';
+import { useAppDispatch } from '../store/hooks';
+import { authService } from '../store/services/authService';
 import { supabase } from '../SUPABASE/supabaseConfig';
+import { compressImageToBase64 } from '../utils/imageCompression';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
 export default function WordOfTheDayScreen() {
   const navigation = useNavigation();
+  const dispatch = useAppDispatch();
   const canvasRef = useRef<View>(null);
   
-  // Word of the day variable for testing
-  const wordOfTheDay = 'cat';
+  // Word of the day state
+  const [wordOfTheDay, setWordOfTheDay] = useState<string>('');
+  const [isLoadingWord, setIsLoadingWord] = useState(true);
+  const [wordError, setWordError] = useState<string | null>(null);
   
   // Drawing state
   const [paths, setPaths] = useState<Array<{ path: string; color: string; strokeWidth: number }>>([]);
@@ -27,6 +33,161 @@ export default function WordOfTheDayScreen() {
   const [scoreMessage, setScoreMessage] = useState<string | null>(null);
   const [isEraseMode, setIsEraseMode] = useState(false);
   const [erasePaths, setErasePaths] = useState<Array<{ path: string; strokeWidth: number }>>([]);
+
+  // Rewarded Ad
+  const { showAd: showRewardedAd, isLoaded, isLoading } = useRewardedAd();
+
+  // Fetch word of the day when component mounts
+  useEffect(() => {
+    fetchWordOfTheDay();
+  }, []);
+
+  // Load previous drawing for current word and same day
+  const loadPreviousDrawing = async (word: string) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Get today's date in YYYY-MM-DD format
+      const today = new Date().toISOString().split('T')[0];
+      
+      // Check if user has already drawn today's word of the day
+      const { data: existingDrawing, error } = await supabase
+        .from('drawings')
+        .select('svg_url, score, message, created_at')
+        .eq('user_id', user.id)
+        .eq('word', word)
+        .gte('created_at', `${today}T00:00:00.000Z`) // Start of today
+        .lt('created_at', `${today}T23:59:59.999Z`)  // End of today
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (error && error.code !== 'PGRST116') { // PGRST116 is "not found"
+        console.error('Error checking for existing drawing:', error);
+        return;
+      }
+
+      if (existingDrawing) {
+        console.log('Found existing drawing for today\'s word of the day:', word);
+        setScore(existingDrawing.score);
+        setScoreMessage(existingDrawing.message);
+        
+        // Load the SVG content from the bucket
+        if (existingDrawing.svg_url) {
+          try {
+            console.log('Loading SVG from URL:', existingDrawing.svg_url);
+            const response = await fetch(existingDrawing.svg_url);
+            
+            if (!response.ok) {
+              console.error('Failed to fetch SVG from bucket:', response.status);
+              return;
+            }
+            
+            const svgContent = await response.text();
+            console.log('SVG content loaded, length:', svgContent.length);
+            
+            const { paths } = parseSVGPaths(svgContent);
+            console.log('Parsed paths count:', paths.length);
+            setPaths(paths);
+          } catch (error) {
+            console.error('Error loading SVG content from bucket:', error);
+          }
+        }
+      } else {
+        console.log('No existing drawing found for today\'s word of the day');
+      }
+    } catch (error) {
+      console.error('Error loading previous drawing:', error);
+    }
+  };
+
+  // Parse SVG paths from content (same as MyDrawingsScreen)
+  const parseSVGPaths = (svgContent: string) => {
+    if (!svgContent || typeof svgContent !== 'string') {
+      return { paths: [], viewBox: '0 0 100% 100%' };
+    }
+    
+    try {
+      // Extract path elements from SVG content
+      const pathRegex = /<path[^>]*d="([^"]*)"[^>]*(?:stroke="([^"]*)")?[^>]*(?:stroke-width="([^"]*)")?[^>]*\/>/g;
+      const paths: Array<{path: string, color: string, strokeWidth: number}> = [];
+      let match;
+      
+      while ((match = pathRegex.exec(svgContent)) !== null) {
+        if (match[1]) { // d attribute is required
+          paths.push({
+            path: match[1],
+            color: match[2] || '#000000', // default to black
+            strokeWidth: parseFloat(match[3]) || 3 // default to 3
+          });
+        }
+      }
+      
+      return { paths, viewBox: '0 0 100% 100%' };
+    } catch (error) {
+      console.error('Error parsing SVG:', error);
+      return { paths: [], viewBox: '0 0 100% 100%' };
+    }
+  };
+
+  // Subscribe to word_of_the_day changes for auto refresh
+  useEffect(() => {
+    const channel = supabase
+      .channel('word_of_the_day_changes')
+      .on('postgres_changes', 
+        { 
+          event: 'INSERT', 
+          schema: 'public', 
+          table: 'word_of_the_day',
+          filter: `date=eq.${new Date().toISOString().split('T')[0]}`
+        }, 
+        (payload) => {
+          console.log('New word of the day detected:', payload);
+          fetchWordOfTheDay();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const fetchWordOfTheDay = async () => {
+    try {
+      setIsLoadingWord(true);
+      setWordError(null);
+
+      const { data, error } = await supabase
+        .rpc('get_word_of_the_day');
+
+      if (error) {
+        console.error('Error fetching word of the day:', error);
+        setWordError('Failed to load word of the day');
+        // No fallback word; keep empty to disable submit
+        setWordOfTheDay('');
+        return;
+      }
+
+      if (data && data.length > 0) {
+        const word = data[0].word;
+        setWordOfTheDay(word);
+        // Load previous drawing for this word
+        await loadPreviousDrawing(word);
+      } else {
+        // If no word is set, leave empty
+        console.log('No word of the day found');
+        setWordOfTheDay('');
+      }
+    } catch (error) {
+      console.error('Error fetching word of the day:', error);
+      setWordError('Failed to load word of the day');
+      setWordOfTheDay('');
+    } finally {
+      setIsLoadingWord(false);
+    }
+  };
 
   // Function to create smooth SVG path from points
   const createSmoothPath = (points: Array<{ x: number; y: number }>) => {
@@ -71,7 +232,7 @@ export default function WordOfTheDayScreen() {
           setPaths(prev => prev.filter(pathData => {
             // Check if the path intersects with the current touch point
             const pathString = pathData.path;
-            const points = [];
+            const points: Array<{ x: number; y: number }> = [];
             
             // Extract all coordinates from the path
             const coordMatches = pathString.match(/\d+\.?\d*,\d+\.?\d*/g);
@@ -79,7 +240,7 @@ export default function WordOfTheDayScreen() {
               coordMatches.forEach(coord => {
                 const [x, y] = coord.split(',').map(Number);
                 if (!isNaN(x) && !isNaN(y)) {
-                  points.push({ x, y });
+                  points.push({ x: x, y: y });
                 }
               });
             }
@@ -158,33 +319,8 @@ export default function WordOfTheDayScreen() {
         return;
       }
 
-      // Capture the canvas as JPEG with optimized settings for cost reduction
-      const jpegUri = await captureRef(canvasRef, {
-        format: 'jpg',
-        quality: 0.8, // 80% quality for high image clarity
-        width: 112,    // Even smaller size for maximum compression
-        height: 112,
-      });
-
-      // Convert JPEG to base64
-      const response = await fetch(jpegUri);
-      const blob = await response.blob();
-      
-      // Debug: Log the actual image size
-      console.log('Image blob size:', blob.size, 'bytes');
-      console.log('Image blob type:', blob.type);
-      
-      const base64 = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const result = reader.result as string;
-          // Remove the data:image/jpeg;base64, prefix to get just the base64 string
-          const base64String = result.split(',')[1];
-          console.log('Base64 string length:', base64String.length);
-          resolve(base64String);
-        };
-        reader.readAsDataURL(blob);
-      });
+      // Compress the canvas to base64 using centralized compression utility
+      const base64 = await compressImageToBase64(canvasRef);
 
       // Get the current session for authorization
       const { data: { session } } = await supabase.auth.getSession();
@@ -231,6 +367,41 @@ export default function WordOfTheDayScreen() {
       console.log("Score message:", scoreData.message);
       setScore(scoreData.score);
       setScoreMessage(scoreData.message);
+
+      // Show score alert with continue option that triggers rewarded ad
+      Alert.alert(
+        'Drawing Complete!',
+        `Your drawing scored ${scoreData.score}%!\n\n${scoreData.message}`,
+        [
+          {
+            text: 'Continue',
+            onPress: async () => {
+              console.log('🎬 Word of the Day: Continue button pressed');
+              // Automatically show rewarded ad when user continues
+              const result = await showRewardedAd((rewarded) => {
+                console.log('🎁 Word of the Day: Reward callback triggered, rewarded:', rewarded);
+                if (rewarded) {
+                  console.log('🎉 Word of the Day: User earned reward, updating tokens');
+                  // Update user's tokens in database and local state
+                  dispatch(authService.updateUserTokens(1));
+                  Alert.alert(
+                    'Reward Earned!',
+                    'You earned 1 Token! Thanks for watching the ad.',
+                    [{ text: 'Awesome!', style: 'default' }]
+                  );
+                } else {
+                  console.log('❌ Word of the Day: No reward earned');
+                }
+              });
+              
+              console.log('📊 Word of the Day: Ad result:', result);
+              if (!result.success) {
+                console.log('Ad not ready, continuing without reward');
+              }
+            }
+          }
+        ]
+      );
 
       // Generate SVG string for storage
       const svgString = generateSVGString();
@@ -308,16 +479,25 @@ export default function WordOfTheDayScreen() {
           <Text style={styles.title}>Word of the Day</Text>
         </View>
         <View style={styles.wordContainer}>
-          <Text style={styles.wordText}>{wordOfTheDay}</Text>
+          {isLoadingWord ? (
+            <Text style={styles.wordText}>Loading...</Text>
+          ) : wordError ? (
+            <View>
+              <Text style={styles.wordText}>{wordOfTheDay}</Text>
+              <Text style={styles.errorText}>{wordError}</Text>
+            </View>
+          ) : (
+            <Text style={styles.wordText}>{wordOfTheDay}</Text>
+          )}
         </View>
         {/* Drawing Instructions and Submit Button - only show if no score yet */}
-        {score === null && (
+        {score === null && !isLoadingWord && wordOfTheDay && (
           <View style={styles.drawingHeader}>
             <Text style={styles.subtitle}>Draw this word!</Text>
             <TouchableOpacity 
-              style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]} 
+              style={[styles.submitButton, (isSubmitting || !wordOfTheDay) && styles.submitButtonDisabled]} 
               onPress={handleSubmit}
-              disabled={isSubmitting}
+              disabled={isSubmitting || !wordOfTheDay}
             >
               <Text style={styles.submitButtonText}>
                 {isSubmitting ? 'Submitting...' : 'Submit'}
@@ -337,12 +517,15 @@ export default function WordOfTheDayScreen() {
                 {scoreMessage}
               </Text>
             )}
+            <Text style={styles.completionMessage}>
+              🎉 You've completed today's Word of the Day! Come back tomorrow for a new challenge.
+            </Text>
           </View>
         )}
         
         {/* Drawing Canvas */}
         <View style={styles.canvasContainer}>
-          <View ref={canvasRef} style={styles.canvas} {...panResponder.panHandlers}>
+          <View ref={canvasRef} style={styles.canvas} {...(score === null ? panResponder.panHandlers : {})}>
             <Svg style={styles.svg}>
               {/* Render all completed paths */}
               {paths.map((pathData, pathIndex) => (
@@ -372,59 +555,61 @@ export default function WordOfTheDayScreen() {
           </View>
         </View>
 
-        {/* Drawing Tools */}
-        <View style={styles.toolsContainer}>
-          <View style={styles.colorPalette}>
-            {colors.map((color) => (
-              <TouchableOpacity
-                key={color}
-                style={[
-                  styles.colorButton,
-                  { backgroundColor: color },
-                  brushColor === color && styles.selectedColor
-                ]}
-                onPress={() => setBrushColor(color)}
-              />
-            ))}
-          </View>
-          
-          <View style={styles.brushSizeContainer}>
-            <Text style={styles.brushSizeLabel}>Brush Size:</Text>
-            <TouchableOpacity
-              style={[styles.brushSizeButton, brushSize === 1 && styles.selectedBrushSize]}
-              onPress={() => setBrushSize(1)}
-            >
-              <View style={[styles.brushSizeIndicator, { width: 4, height: 4, backgroundColor: brushColor }]} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.brushSizeButton, brushSize === 3 && styles.selectedBrushSize]}
-              onPress={() => setBrushSize(3)}
-            >
-              <View style={[styles.brushSizeIndicator, { width: 8, height: 8, backgroundColor: brushColor }]} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.brushSizeButton, brushSize === 5 && styles.selectedBrushSize]}
-              onPress={() => setBrushSize(5)}
-            >
-              <View style={[styles.brushSizeIndicator, { width: 12, height: 12, backgroundColor: brushColor }]} />
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.actionButtons}>
-            <TouchableOpacity 
-              style={[styles.actionButton, isEraseMode && styles.activeActionButton]} 
-              onPress={() => setIsEraseMode(!isEraseMode)}
-            >
-              <Text style={[styles.actionButtonText, isEraseMode && styles.activeActionButtonText]}>
-                {isEraseMode ? '✏️ Draw' : '🧽 Erase'}
-              </Text>
-            </TouchableOpacity>
+        {/* Drawing Tools - only show if not completed */}
+        {score === null && (
+          <View style={styles.toolsContainer}>
+            <View style={styles.colorPalette}>
+              {colors.map((color) => (
+                <TouchableOpacity
+                  key={color}
+                  style={[
+                    styles.colorButton,
+                    { backgroundColor: color },
+                    brushColor === color && styles.selectedColor
+                  ]}
+                  onPress={() => setBrushColor(color)}
+                />
+              ))}
+            </View>
             
-            <TouchableOpacity style={styles.clearButton} onPress={clearCanvas}>
-              <Text style={styles.clearButtonText}>Clear</Text>
-            </TouchableOpacity>
+            <View style={styles.brushSizeContainer}>
+              <Text style={styles.brushSizeLabel}>Brush Size:</Text>
+              <TouchableOpacity
+                style={[styles.brushSizeButton, brushSize === 1 && styles.selectedBrushSize]}
+                onPress={() => setBrushSize(1)}
+              >
+                <View style={[styles.brushSizeIndicator, { width: 4, height: 4, backgroundColor: brushColor }]} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.brushSizeButton, brushSize === 3 && styles.selectedBrushSize]}
+                onPress={() => setBrushSize(3)}
+              >
+                <View style={[styles.brushSizeIndicator, { width: 8, height: 8, backgroundColor: brushColor }]} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.brushSizeButton, brushSize === 5 && styles.selectedBrushSize]}
+                onPress={() => setBrushSize(5)}
+              >
+                <View style={[styles.brushSizeIndicator, { width: 12, height: 12, backgroundColor: brushColor }]} />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.actionButtons}>
+              <TouchableOpacity 
+                style={[styles.actionButton, isEraseMode && styles.activeActionButton]} 
+                onPress={() => setIsEraseMode(!isEraseMode)}
+              >
+                <Text style={[styles.actionButtonText, isEraseMode && styles.activeActionButtonText]}>
+                  {isEraseMode ? '✏️ Draw' : '🧽 Erase'}
+                </Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity style={styles.clearButton} onPress={clearCanvas}>
+                <Text style={styles.clearButtonText}>Clear</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -521,13 +706,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   canvasContainer: {
-    flex: 1,
-    backgroundColor: '#f8f9fa',
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#e9ecef',
+    width: screenWidth - 40,
+    height: screenWidth - 100,
+    alignSelf: 'center',
+    marginHorizontal: 20,
+    marginTop: 0,
     marginBottom: 20,
+    borderRadius: 10,
     overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#E0E0E0',
   },
   canvas: {
     flex: 1,
@@ -643,5 +831,20 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 8,
     fontStyle: 'italic',
+  },
+  errorText: {
+    fontSize: 12,
+    color: '#FF6B6B',
+    textAlign: 'center',
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  completionMessage: {
+    fontSize: 12,
+    color: '#2E7D32',
+    textAlign: 'center',
+    marginTop: 8,
+    fontWeight: '500',
+    fontFamily: 'Nunito_600SemiBold',
   },
 });

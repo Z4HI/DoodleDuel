@@ -6,14 +6,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-interface FriendRequestNotification {
-  sender_id: string;
-  receiver_id: string;
-  sender_username: string;
-  receiver_expo_push_token: string;
-}
-
 serve(async (req) => {
+  console.log('Friend request notification function called');
+  
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -32,11 +27,15 @@ serve(async (req) => {
     )
 
     // Get the request body
-    const { sender_id, receiver_id } = await req.json()
+    const body = await req.json();
+    console.log('Request body:', body);
+    
+    const { sender_id, receiver_id } = body;
 
     if (!sender_id || !receiver_id) {
+      console.error('Missing required fields:', { sender_id, receiver_id });
       return new Response(
-        JSON.stringify({ error: 'Missing required fields' }),
+        JSON.stringify({ error: 'Missing required fields', received: { sender_id, receiver_id } }),
         { 
           status: 400, 
           headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
@@ -45,6 +44,7 @@ serve(async (req) => {
     }
 
     // Get sender's username
+    console.log('Looking up sender:', sender_id);
     const { data: senderProfile, error: senderError } = await supabaseClient
       .from('profiles')
       .select('username')
@@ -52,8 +52,9 @@ serve(async (req) => {
       .single()
 
     if (senderError || !senderProfile) {
+      console.error('Sender not found:', senderError, 'for sender_id:', sender_id);
       return new Response(
-        JSON.stringify({ error: 'Sender not found' }),
+        JSON.stringify({ error: 'Sender not found', details: senderError?.message, sender_id }),
         { 
           status: 404, 
           headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
@@ -62,15 +63,17 @@ serve(async (req) => {
     }
 
     // Get receiver's expo push token
+    console.log('Looking up receiver:', receiver_id);
     const { data: receiverProfile, error: receiverError } = await supabaseClient
       .from('profiles')
-      .select('expoPushToken')
+      .select('expoPushToken, username')
       .eq('id', receiver_id)
       .single()
 
     if (receiverError || !receiverProfile) {
+      console.error('Receiver not found:', receiverError, 'for receiver_id:', receiver_id);
       return new Response(
-        JSON.stringify({ error: 'Receiver not found' }),
+        JSON.stringify({ error: 'Receiver not found', details: receiverError?.message, receiver_id }),
         { 
           status: 404, 
           headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
@@ -79,8 +82,30 @@ serve(async (req) => {
     }
 
     if (!receiverProfile.expoPushToken) {
+      console.error('Receiver has no push token:', receiverProfile.username);
       return new Response(
-        JSON.stringify({ error: 'Receiver has no push token' }),
+        JSON.stringify({ 
+          error: 'Receiver has no push token', 
+          receiver_username: receiverProfile.username,
+          receiver_id 
+        }),
+        { 
+          status: 400, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      )
+    }
+
+    // Validate Expo push token format
+    if (!receiverProfile.expoPushToken.startsWith('ExponentPushToken[') && 
+        !receiverProfile.expoPushToken.startsWith('ExpoPushToken[')) {
+      console.error('Invalid Expo push token format:', receiverProfile.expoPushToken);
+      return new Response(
+        JSON.stringify({ 
+          error: 'Invalid Expo push token format', 
+          receiver_username: receiverProfile.username,
+          token: receiverProfile.expoPushToken.substring(0, 20) + '...'
+        }),
         { 
           status: 400, 
           headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
@@ -104,6 +129,9 @@ serve(async (req) => {
       badge: 1,
     }
 
+    console.log('Sending push notification to:', receiverProfile.expoPushToken);
+    console.log('Notification data:', notificationData);
+
     const expoResponse = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: {
@@ -116,9 +144,18 @@ serve(async (req) => {
 
     if (!expoResponse.ok) {
       const errorText = await expoResponse.text()
-      console.error('Expo push notification failed:', errorText)
+      console.error('Expo push notification failed:', {
+        status: expoResponse.status,
+        statusText: expoResponse.statusText,
+        error: errorText,
+        notificationData
+      });
       return new Response(
-        JSON.stringify({ error: 'Failed to send push notification' }),
+        JSON.stringify({ 
+          error: 'Failed to send push notification', 
+          expoError: errorText,
+          status: expoResponse.status
+        }),
         { 
           status: 500, 
           headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
@@ -142,9 +179,17 @@ serve(async (req) => {
     )
 
   } catch (error) {
-    console.error('Error in send-friend-request-notification:', error)
+    console.error('Error in send-friend-request-notification:', {
+      error: error.message,
+      stack: error.stack,
+      name: error.name
+    });
     return new Response(
-      JSON.stringify({ error: 'Internal server error' }),
+      JSON.stringify({ 
+        error: 'Internal server error', 
+        details: error.message,
+        type: error.name
+      }),
       { 
         status: 500, 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 

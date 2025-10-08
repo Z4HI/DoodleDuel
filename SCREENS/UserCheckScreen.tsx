@@ -22,17 +22,13 @@ export default function UserCheckScreen() {
       }
 
       // Check if user has a profile and username
-      console.log('🔍 Checking profile for user:', user.id);
       const { data: profile, error } = await supabase
         .from('profiles')
         .select('username, "isNewUser"')
         .eq('id', user.id)
         .single();
 
-      console.log('🔍 Profile query result:', { profile, error });
-
       if (error || !profile) {
-        console.log('❌ No profile found, trying to create one...');
         
         // Try to create profile manually
         const { error: createError } = await supabase
@@ -53,21 +49,18 @@ export default function UserCheckScreen() {
           return;
         }
 
-        console.log('✅ Profile created successfully, navigating to username screen');
         navigation.navigate('Username' as never);
         return;
       }
 
       if (!profile.username || profile.isNewUser) {
         // User needs to create username
-        console.log('🚀 User needs username, navigating to Username screen...');
         navigation.navigate('Username' as never);
         return;
       }
 
       // User has username, go to main app
-      console.log('✅ User has username, navigating to MainTabs...');
-      navigation.navigate('MainTabs' as never);
+      navigation.navigate('Home' as never);
       
     } catch (error) {
       console.error('Error checking user profile:', error);

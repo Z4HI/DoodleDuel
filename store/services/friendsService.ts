@@ -42,7 +42,7 @@ export const friendsService = {
       // Then, send push notification via edge function
       try {
         const { data: notificationResult, error: notificationError } = await supabase.functions.invoke(
-          'send-friend-request',
+          'send-friend-request-notification',
           {
             body: {
               sender_id: user.id,
@@ -52,13 +52,23 @@ export const friendsService = {
         );
 
         if (notificationError) {
-          console.error('Error sending push notification:', notificationError);
+          console.error('Error sending push notification:', {
+            error: notificationError,
+            sender_id: user.id,
+            receiver_id: receiverId,
+            functionName: 'send-friend-request'
+          });
           // Don't fail the friend request if notification fails
         } else {
           console.log('Push notification sent successfully:', notificationResult);
         }
       } catch (notificationError) {
-        console.error('Error calling notification function:', notificationError);
+        console.error('Error calling notification function:', {
+          error: notificationError,
+          sender_id: user.id,
+          receiver_id: receiverId,
+          functionName: 'send-friend-request'
+        });
         // Don't fail the friend request if notification fails
       }
 

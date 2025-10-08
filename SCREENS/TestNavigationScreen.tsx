@@ -15,13 +15,13 @@ export default function TestNavigationScreen() {
     }
   };
 
-  const testMainTabsNavigation = () => {
-    console.log('🧪 Testing navigation to MainTabs...');
+  const testHomeNavigation = () => {
+    console.log('🧪 Testing navigation to Home...');
     try {
-      navigation.navigate('MainTabs' as never);
-      console.log('✅ Navigation to MainTabs successful');
+      navigation.navigate('Home' as never);
+      console.log('✅ Navigation to Home successful');
     } catch (error) {
-      console.error('❌ Navigation to MainTabs failed:', error);
+      console.error('❌ Navigation to Home failed:', error);
     }
   };
 
@@ -33,8 +33,8 @@ export default function TestNavigationScreen() {
         <Text style={styles.buttonText}>Test Username Navigation</Text>
       </TouchableOpacity>
       
-      <TouchableOpacity style={styles.button} onPress={testMainTabsNavigation}>
-        <Text style={styles.buttonText}>Test MainTabs Navigation</Text>
+      <TouchableOpacity style={styles.button} onPress={testHomeNavigation}>
+        <Text style={styles.buttonText}>Test Home Navigation</Text>
       </TouchableOpacity>
     </View>
   );
