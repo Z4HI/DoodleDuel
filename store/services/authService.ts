@@ -27,7 +27,7 @@ export const authService = {
     try {
       const { data: profile, error } = await supabase
         .from('profiles')
-        .select('username, email, game_tokens')
+        .select('username, email, game_tokens, level, total_xp, tier')
         .eq('id', session.user.id)
         .maybeSingle(); // Use maybeSingle() instead of single() to handle no results
 
@@ -36,7 +36,10 @@ export const authService = {
         dispatch(setUserInfo({
           username: 'No username',
           email: session.user.email || 'No email',
-          game_tokens: 0
+          game_tokens: 0,
+          level: 1,
+          total_xp: 0,
+          tier: 1
         }));
         return;
       }
@@ -48,7 +51,7 @@ export const authService = {
         // First check if profile exists (in case of race condition)
         const { data: existingProfile } = await supabase
           .from('profiles')
-          .select('username, email, game_tokens')
+          .select('username, email, game_tokens, level, total_xp, tier')
           .eq('id', session.user.id)
           .maybeSingle();
 
@@ -57,7 +60,10 @@ export const authService = {
           const userInfo = {
             username: existingProfile?.username || 'No username',
             email: existingProfile?.email || session.user.email || 'No email',
-            game_tokens: existingProfile?.game_tokens || 0
+            game_tokens: existingProfile?.game_tokens || 0,
+            level: existingProfile?.level || 1,
+            total_xp: existingProfile?.total_xp || 0,
+            tier: existingProfile?.tier || 1
           };
           dispatch(setUserInfo(userInfo));
           return;
@@ -84,7 +90,7 @@ export const authService = {
             console.log('Profile already exists, fetching it...');
             const { data: existingProfile } = await supabase
               .from('profiles')
-              .select('username, email, game_tokens')
+              .select('username, email, game_tokens, level, total_xp, tier')
               .eq('id', session.user.id)
               .maybeSingle();
 
@@ -103,7 +109,10 @@ export const authService = {
           dispatch(setUserInfo({
             username: 'No username',
             email: session.user.email || 'No email',
-            game_tokens: 0
+            game_tokens: 0,
+            level: 1,
+            total_xp: 0,
+            tier: 1
           }));
           return;
         }
@@ -111,7 +120,7 @@ export const authService = {
         // After creating profile, fetch it again to get the updated data
         const { data: newProfile } = await supabase
           .from('profiles')
-          .select('username, email, game_tokens')
+          .select('username, email, game_tokens, level, total_xp, tier')
           .eq('id', session.user.id)
           .maybeSingle();
 
@@ -127,7 +136,10 @@ export const authService = {
           dispatch(setUserInfo({
             username: 'No username',
             email: session.user.email || 'No email',
-            game_tokens: 0
+            game_tokens: 0,
+            level: 1,
+            total_xp: 0,
+            tier: 1
           }));
         }
         return;
@@ -136,16 +148,24 @@ export const authService = {
       const userInfo = {
         username: profile?.username || 'No username',
         email: profile?.email || session.user.email || 'No email',
-        game_tokens: profile?.game_tokens || 0
+        game_tokens: profile?.game_tokens || 0,
+        level: profile?.level || 1,
+        total_xp: profile?.total_xp || 0,
+        tier: profile?.tier || 1,
+        id: session.user.id
       };
       
+      console.log('Setting userInfo with XP data:', userInfo);
       dispatch(setUserInfo(userInfo));
     } catch (error) {
       console.error('Error fetching user info:', error);
       dispatch(setUserInfo({
         username: 'No username',
         email: session.user.email || 'No email',
-        game_tokens: 0
+        game_tokens: 0,
+        level: 1,
+        total_xp: 0,
+        tier: 1
       }));
     }
   },
@@ -219,7 +239,7 @@ export const authService = {
       // Update local state
       const { data: updatedProfile } = await supabase
         .from('profiles')
-        .select('username, email, game_tokens')
+        .select('username, email, game_tokens, level, total_xp, tier')
         .eq('id', user.id)
         .single();
 
@@ -227,7 +247,10 @@ export const authService = {
         dispatch(setUserInfo({
           username: updatedProfile.username,
           email: updatedProfile.email,
-          game_tokens: updatedProfile.game_tokens
+          game_tokens: updatedProfile.game_tokens,
+          level: updatedProfile.level || 1,
+          total_xp: updatedProfile.total_xp || 0,
+          tier: updatedProfile.tier || 1
         }));
       }
 

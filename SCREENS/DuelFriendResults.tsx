@@ -3,6 +3,8 @@ import React, { useEffect, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
+import { useDispatch } from 'react-redux';
+import { xpService } from '../store/services/xpService';
 import { supabase } from '../SUPABASE/supabaseConfig';
 
 interface DuelFriendResultsRouteParams {
@@ -43,13 +45,20 @@ export default function DuelFriendResults() {
   const navigation = useNavigation();
   const route = useRoute();
   const { duelId } = route.params as DuelFriendResultsRouteParams;
+  const dispatch = useDispatch();
   
   console.log('=== DuelFriendResults Component Loaded ===');
   console.log('DuelFriendResults: Received duelId:', duelId);
   
   const [duelData, setDuelData] = useState<DuelData | null>(null);
   const [playerResults, setPlayerResults] = useState<PlayerResults[]>([]);
+  const [turnsList, setTurnsList] = useState<Array<{ turnNumber: number; username: string; aiGuess: string; similarity: number; isWinnerTurn: boolean }>>([]);
   const [loading, setLoading] = useState(true);
+  const [xpAwarded, setXpAwarded] = useState(false);
+  const [xpEarned, setXpEarned] = useState<number>(0);
+  const [leveledUp, setLeveledUp] = useState(false);
+  const [newLevel, setNewLevel] = useState<number>(0);
+  const [tierUp, setTierUp] = useState(false);
 
   // Parse SVG paths from content (same as other screens)
   const parseSVGPaths = (svgContent: string) => {
@@ -152,6 +161,36 @@ export default function DuelFriendResults() {
 
       // Load both players' game results
       await loadPlayerResults(duel.challenger_id, duel.opponent_id, duel.winner_id, duel.gamemode, duel.word);
+
+      // Award XP (only once)
+      if (!xpAwarded && user && duel.winner_id) {
+        setXpAwarded(true);
+        const won = user.id === duel.winner_id;
+        
+        // Get user's score for perfect bonus calculation
+        let similarity = 0;
+        if (duel.gamemode === 'doodleDuel') {
+          // For doodle duel, use the score from drawings
+          const drawingId = isChallenger ? duel.challenger_drawing_id : duel.opponent_drawing_id;
+          if (drawingId) {
+            const { data: drawing } = await supabase
+              .from('drawings')
+              .select('score')
+              .eq('id', drawingId)
+              .single();
+            similarity = drawing?.score || 0;
+          }
+        }
+        
+        const xpResult = await xpService.awardDuelXP(won, similarity, dispatch);
+        
+        if (xpResult) {
+          setXpEarned(xpResult.xp_earned);
+          setLeveledUp(xpResult.leveled_up);
+          setNewLevel(xpResult.new_level);
+          setTierUp(xpResult.tier_up);
+        }
+      }
 
     } catch (error) {
       console.error('Error loading duel results:', error);
@@ -287,65 +326,61 @@ export default function DuelFriendResults() {
           }
         }
       } else if (gamemode === 'doodleHunt') {
-        // Handle DoodleHunt results - get games from doodle_hunt_duel table
-        console.log('Loading DoodleHunt results from doodle_hunt_duel table');
-        
-        const { data: games, error: gamesError } = await supabase
-          .from('doodle_hunt_duel')
-          .select('*')
-          .eq('duel_id', duelId)
-          .in('user_id', [challengerId, opponentId]);
+        // New turn-based friend DoodleHunt: read from doodle_hunt_friend_turns
+        console.log('Loading DoodleHunt Friend results from doodle_hunt_friend_turns');
 
-        if (gamesError) {
-          console.error('Error fetching games:', gamesError);
+        const { data: turns, error: turnsError } = await supabase
+          .from('doodle_hunt_friend_turns')
+          .select('user_id, turn_number, ai_guess, similarity_score')
+          .eq('duel_id', duelId)
+          .order('turn_number', { ascending: true });
+
+        if (turnsError) {
+          console.error('Error fetching turns:', turnsError);
           return;
         }
 
-        console.log('Games found in results screen:', games);
-
-        for (const game of games) {
-          console.log('Processing game:', game.id, 'for user:', game.user_id);
-          
-          // Get guesses for this player
-          const { data: guesses, error: guessesError } = await supabase
-            .from('doodle_hunt_duel_guesses')
-            .select('*')
-            .eq('game_id', game.id)
-            .order('guess_number', { ascending: true });
-
-          if (guessesError) {
-            console.error('Error fetching guesses:', guessesError);
-            continue;
-          }
-
-          console.log('Guesses found for game', game.id, ':', guesses);
-
-          // Get username for this player
-          const { data: profile, error: profileError } = await supabase
-            .from('profiles')
-            .select('username')
-            .eq('id', game.user_id)
-            .single();
-
-          if (profileError) {
-            console.error('Error fetching profile:', profileError);
-            continue;
-          }
-
-          const playerGuesses: PlayerGuess[] = guesses.map(guess => ({
-            guess: guess.ai_guess_word,
-            score: guess.similarity_score,
-            attempt: guess.guess_number
-          }));
-
-          results.push({
-            username: profile.username,
-            guesses: playerGuesses,
-            finalScore: game.final_score,
-            totalGuesses: game.guesses,
-            isWinner: game.user_id === winnerId
-          });
+        const userIds = Array.from(new Set((turns || []).map(t => t.user_id)));
+        if (userIds.length === 0) {
+          console.log('No turns found for duel');
         }
+
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, username')
+          .in('id', userIds as any);
+
+        const idToUsername: Record<string, string> = {};
+        (profiles || []).forEach((p: any) => {
+          idToUsername[p.id] = p.username || 'Unknown';
+        });
+
+        // Build a single chronological turns list with winner/loser coloring
+        const chronologicalTurns = (turns || []).map(t => ({
+          turnNumber: t.turn_number,
+          username: idToUsername[t.user_id] || 'Unknown',
+          aiGuess: t.ai_guess || '',
+          similarity: t.similarity_score || 0,
+          isWinnerTurn: t.user_id === winnerId,
+        })).sort((a, b) => a.turnNumber - b.turnNumber);
+        setTurnsList(chronologicalTurns);
+
+        // Also compute per-user summary for header stats
+        const byUser: Record<string, { finalScore: number; count: number } > = {};
+        (turns || []).forEach(t => {
+          if (!byUser[t.user_id]) byUser[t.user_id] = { finalScore: 0, count: 0 };
+          byUser[t.user_id].finalScore = Math.max(byUser[t.user_id].finalScore, t.similarity_score || 0);
+          byUser[t.user_id].count += 1;
+        });
+        userIds.forEach(uid => {
+          results.push({
+            username: idToUsername[uid] || 'Unknown',
+            guesses: [],
+            finalScore: byUser[uid]?.finalScore || 0,
+            totalGuesses: byUser[uid]?.count || 0,
+            isWinner: uid === winnerId,
+          });
+        });
       } else {
         console.error('Unknown gamemode:', gamemode);
         return;
@@ -469,6 +504,24 @@ export default function DuelFriendResults() {
           <Text style={styles.wordText}>{duelData.word.toUpperCase()}</Text>
         </View>
 
+        {/* XP Earned Section */}
+        {xpEarned > 0 && (
+          <View style={styles.xpSection}>
+            <Text style={styles.xpTitle}>💎 XP Earned</Text>
+            <Text style={styles.xpAmount}>+{xpEarned} XP</Text>
+            {leveledUp && (
+              <Text style={styles.levelUpText}>
+                🎉 Level Up! Now Level {newLevel}!
+              </Text>
+            )}
+            {tierUp && (
+              <Text style={styles.tierUpText}>
+                🏆 TIER UP! You reached a new tier!
+              </Text>
+            )}
+          </View>
+        )}
+
         {/* Results Summary */}
         <View style={[
           styles.summarySection,
@@ -535,51 +588,23 @@ export default function DuelFriendResults() {
             })}
           </View>
         ) : (
-          // DoodleHunt: Show guess-based results
-          <View style={styles.playersContainer}>
-            {playerResults.map((player, index) => (
-              <View key={index} style={styles.playerCard}>
-                <View style={styles.playerHeader}>
-                  <Text style={styles.playerName}>
-                    {player.username} {player.isWinner && "👑"}
-                  </Text>
-                  <Text style={styles.playerStats}>
-                    {player.totalGuesses} guesses • {player.finalScore}% final score
-                  </Text>
-                </View>
-
-                {/* Player's Guesses */}
-                <View style={styles.guessesSection}>
-                  <Text style={styles.guessesTitle}>Guesses:</Text>
-                  {console.log('Player guesses for', player.username, ':', player.guesses)}
-                  {player.guesses.map((guess, guessIndex) => {
-                    let barColor = '#E57373'; // dull red
-                    if (guess.score === 100) {
-                      barColor = '#64B5F6'; // dull blue for 100%
-                    } else if (guess.score >= 80) {
-                      barColor = '#81C784'; // dull green
-                    } else if (guess.score >= 60) {
-                      barColor = '#FFE082'; // dull yellow (amber)
-                    } else if (guess.score >= 40) {
-                      barColor = '#FFB74D'; // dull orange
-                    }
-                    
-                    return (
-                      <View key={guessIndex} style={styles.guessItem}>
-                        <View style={styles.progressBarContainer}>
-                          <View style={[styles.progressBar, { 
-                            width: `${guess.score}%`,
-                            backgroundColor: barColor 
-                          }]} />
-                          <Text style={styles.guessWordInside}>"{guess.guess}"</Text>
-                          <Text style={styles.guessScoreOutside}>{guess.score}%</Text>
-                        </View>
-                      </View>
-                    );
-                  })}
-                </View>
-              </View>
-            ))}
+          // DoodleHunt Friend (turn-based): single chronological table colored by winner/loser
+          <View style={styles.turnsContainer}>
+            <Text style={styles.turnsTitle}>Top Guesses</Text>
+            {[...turnsList]
+              .sort((a, b) => b.similarity - a.similarity)
+              .map((t, idx) => {
+                const barColor = t.isWinnerTurn ? '#81C784' : '#E57373';
+                return (
+                  <View key={idx} style={styles.guessItem}>
+                    <View style={styles.progressBarContainer}>
+                      <View style={[styles.progressBar, { width: `${t.similarity}%`, backgroundColor: barColor }]} />
+                      <Text style={styles.guessWordInside}>{t.username}: "{t.aiGuess}"</Text>
+                      <Text style={styles.guessScoreOutside}>{t.similarity}%</Text>
+                    </View>
+                  </View>
+                );
+              })}
           </View>
         )}
 
@@ -828,6 +853,21 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 20,
   },
+  turnsContainer: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 10,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginBottom: 20,
+  },
+  turnsTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
   // Drawing styles for DoodleDuel
   drawingsContainer: {
     flexDirection: 'row',
@@ -894,5 +934,38 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
     fontStyle: 'italic',
+  },
+  xpSection: {
+    backgroundColor: '#E8F5E9',
+    padding: 20,
+    borderRadius: 12,
+    marginBottom: 20,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#4CAF50',
+  },
+  xpTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  xpAmount: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    color: '#4CAF50',
+    marginBottom: 8,
+  },
+  levelUpText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FF6B35',
+    marginTop: 8,
+  },
+  tierUpText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#FFD700',
+    marginTop: 4,
   },
 });

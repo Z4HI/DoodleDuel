@@ -1,11 +1,14 @@
 import { useNavigation } from '@react-navigation/native';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, Dimensions, PanResponder, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Animated, Dimensions, PanResponder, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { useDispatch, useSelector } from 'react-redux';
+import DrawingToolsPalette from '../COMPONENTS/DrawingToolsPalette';
 import { useRewardedAd } from '../COMPONENTS/RewardedAd';
+import XPBanner from '../COMPONENTS/XPBanner';
 import { RootState } from '../store';
+import { xpService } from '../store/services/xpService';
 import { setUserInfo } from '../store/slices/authSlice';
 import { supabase } from '../SUPABASE/supabaseConfig';
 import { compressImageToBase64 } from '../utils/imageCompression';
@@ -28,6 +31,7 @@ export default function DoodleHuntScreen() {
   const [displayWord, setDisplayWord] = useState<string>('');
   const [isLoadingWord, setIsLoadingWord] = useState(true);
   const [wordError, setWordError] = useState<string | null>(null);
+  const [currentStreak, setCurrentStreak] = useState<number>(0);
   const [attempts, setAttempts] = useState(0);
   const [guessesLeft, setGuessesLeft] = useState(5);
   const [gameWon, setGameWon] = useState(false);
@@ -47,9 +51,92 @@ export default function DoodleHuntScreen() {
   const [isEraseMode, setIsEraseMode] = useState(false);
   const [isControlsExpanded, setIsControlsExpanded] = useState(false);
   const [gameId, setGameId] = useState<string | null>(null);
+  const [xpEarned, setXpEarned] = useState<number>(0);
+  const [leveledUp, setLeveledUp] = useState(false);
+  const [newLevel, setNewLevel] = useState<number>(0);
 
   // Rewarded Ad
   const { showAd: showRewardedAd, isLoaded, isLoading } = useRewardedAd();
+
+  // Fetch current streak on mount
+  useEffect(() => {
+    fetchStreak();
+  }, []);
+
+  // Fetch current streak
+  const fetchStreak = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('doodle_hunt_streak')
+        .eq('id', user.id)
+        .single();
+
+      if (profile) {
+        setCurrentStreak(profile.doodle_hunt_streak || 0);
+      }
+    } catch (error) {
+      console.error('Error fetching streak:', error);
+    }
+  };
+
+  // Update streak when playing
+  const updateStreak = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const today = new Date().toISOString().split('T')[0];
+
+      // Get current profile data
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('doodle_hunt_streak, last_doodle_hunt_date')
+        .eq('id', user.id)
+        .single();
+
+      if (!profile) return;
+
+      const lastDate = profile.last_doodle_hunt_date;
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+      let newStreak = 0;
+
+      if (lastDate === today) {
+        // Already played today, keep current streak
+        newStreak = profile.doodle_hunt_streak || 0;
+      } else if (lastDate === yesterdayStr) {
+        // Played yesterday, increment streak
+        newStreak = (profile.doodle_hunt_streak || 0) + 1;
+      } else if (!lastDate) {
+        // First time ever playing
+        newStreak = 1;
+      } else {
+        // Gap in playing, reset to 0
+        newStreak = 0;
+      }
+
+      // Update database
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          doodle_hunt_streak: newStreak,
+          last_doodle_hunt_date: today
+        })
+        .eq('id', user.id);
+
+      if (!error) {
+        setCurrentStreak(newStreak);
+      }
+    } catch (error) {
+      console.error('Error updating streak:', error);
+    }
+  };
 
   // Function to subtract a token from user's profile
   const subtractToken = async (): Promise<boolean> => {
@@ -227,22 +314,53 @@ export default function DoodleHuntScreen() {
       // Check if there's already an active game
       const { data: activeGame, error } = await supabase
         .from('doodle_hunt_solo')
-        .select('id, target_word, status, guesses_left')
+        .select('id, target_word, status, guesses_left, created_at')
         .eq('user_id', (await supabase.auth.getUser()).data.user?.id)
         .eq('status', 'in_progress')
         .single();
 
       if (activeGame && !error) {
-        // Active game exists, load it instead of creating new one
-        console.log('Active game found, loading existing game');
-        console.log('Active game data:', {
-          id: activeGame.id,
-          target_word: activeGame.target_word
+        // Check if the game was created today
+        const gameDate = new Date(activeGame.created_at).toISOString().split('T')[0];
+        const today = new Date().toISOString().split('T')[0];
+        
+        console.log('📅 Date Check:', {
+          gameDate,
+          today,
+          isToday: gameDate === today,
+          activeGame: {
+            id: activeGame.id,
+            target_word: activeGame.target_word,
+            created_at: activeGame.created_at,
+            guesses_left: activeGame.guesses_left
+          }
         });
-        setGameId(activeGame.id);
-        setGuessesLeft(activeGame.guesses_left ?? 5);
-        await loadGameGuesses(activeGame.id);
-        return;
+        
+        if (gameDate === today) {
+          // Active game from today exists, load it
+          console.log('✅ Active game from today found, loading existing game');
+          setGameId(activeGame.id);
+          setGuessesLeft(activeGame.guesses_left ?? 5);
+          await loadGameGuesses(activeGame.id);
+          return;
+        } else {
+          // Game is from a previous day, mark it as lost
+          console.log('⚠️ Found in-progress game from previous day');
+          console.log('🔄 Marking old game as lost...');
+          
+          const { error: updateError } = await supabase.rpc('complete_doodle_hunt_game', {
+            game_uuid: activeGame.id,
+            game_status: 'lost'
+          });
+          
+          if (updateError) {
+            console.error('❌ Error marking old game as lost:', updateError);
+          } else {
+            console.log('✅ Successfully marked old game as lost');
+          }
+          console.log('🆕 Continuing to create new game with today\'s word:', selectedWord);
+          // Continue to create new game with today's word
+        }
       }
       
       // Check if user has already completed today's doodle hunt daily
@@ -368,7 +486,7 @@ export default function DoodleHuntScreen() {
       // Check if user has an active game
       const { data: activeGame, error } = await supabase
         .from('doodle_hunt_solo')
-        .select('id, target_word, status, guesses_left')
+        .select('id, target_word, status, guesses_left, created_at')
         .eq('user_id', (await supabase.auth.getUser()).data.user?.id)
         .eq('status', 'in_progress')
         .single();
@@ -381,8 +499,46 @@ export default function DoodleHuntScreen() {
       }
 
       if (activeGame) {
-        // Resume existing game
-        console.log('Resuming active game:', activeGame.id);
+        // Check if the game was created today
+        const gameDate = new Date(activeGame.created_at).toISOString().split('T')[0];
+        const today = new Date().toISOString().split('T')[0];
+        
+        console.log('📅 [checkForActiveGame] Date Check:', {
+          gameDate,
+          today,
+          isToday: gameDate === today,
+          activeGame: {
+            id: activeGame.id,
+            target_word: activeGame.target_word,
+            created_at: activeGame.created_at,
+            guesses_left: activeGame.guesses_left
+          }
+        });
+        
+        if (gameDate !== today) {
+          // Game is from a previous day, mark it as lost
+          console.log('⚠️ [checkForActiveGame] Found in-progress game from previous day');
+          console.log('🔄 [checkForActiveGame] Marking old game as lost...');
+          
+          const { error: updateError } = await supabase.rpc('complete_doodle_hunt_game', {
+            game_uuid: activeGame.id,
+            game_status: 'lost'
+          });
+          
+          if (updateError) {
+            console.error('❌ [checkForActiveGame] Error marking old game as lost:', updateError);
+          } else {
+            console.log('✅ [checkForActiveGame] Successfully marked old game as lost');
+          }
+          
+          // Fetch today's word and create new game
+          console.log('🆕 [checkForActiveGame] Creating new game for today');
+          await fetchRandomWord();
+          return;
+        }
+        
+        // Resume existing game from today
+        console.log('✅ [checkForActiveGame] Resuming active game from today:', activeGame.id);
         console.log('Database guesses_left:', activeGame.guesses_left);
         setGameId(activeGame.id);
         setSecretWord(activeGame.target_word);
@@ -710,8 +866,78 @@ export default function DoodleHuntScreen() {
       }
 
       console.log('Game completed with status:', status);
+      
+      // Award XP for loss (XP for wins is awarded separately)
+      if (status === 'lost') {
+        const xpResult = await xpService.awardDoodleHuntXP(false, attempts, currentStreak, dispatch);
+        
+        if (xpResult && xpResult.xp_earned > 0) {
+          // Show a small toast or console log for loss XP
+          console.log(`Earned ${xpResult.xp_earned} XP for playing!`);
+        }
+      }
     } catch (error) {
       console.error('Error in completeGame:', error);
+    }
+  };
+
+  const generateProgressBar = (score: number): string => {
+    // Generate 10 blocks for the progress bar
+    const filledBlocks = Math.floor(score / 10);
+    const emptyBlocks = 10 - filledBlocks;
+    
+    // Determine color based on score
+    let colorBlock = '🟥'; // Red for 0-49%
+    if (score >= 80) colorBlock = '🟩'; // Green for 80-100%
+    else if (score >= 50) colorBlock = '🟨'; // Yellow for 50-79%
+    
+    return colorBlock.repeat(filledBlocks) + '⬜'.repeat(emptyBlocks);
+  };
+
+  const generateShareText = (): string => {
+    const today = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const totalGuesses = previousAttempts.length;
+    const scores = previousAttempts.map(a => a.score);
+    const bestScore = Math.max(...scores);
+    const isWon = gameWon && bestScore === 100;
+    
+    let shareText = `🎨 Doodle Hunt Daily - ${today}\n\n`;
+    
+    if (isWon) {
+      shareText += `🏆 SOLVED in ${totalGuesses} guess${totalGuesses === 1 ? '' : 'es'}!\n\n`;
+    } else if (bestScore >= 80) {
+      shareText += `So close! Best: ${bestScore}% 😩\n\n`;
+    } else {
+      shareText += `😔 Didn't get it - Best: ${bestScore}%\n\n`;
+    }
+    
+    // Add progress bars for each guess
+    previousAttempts.forEach(attempt => {
+      const bar = generateProgressBar(attempt.score);
+      const emoji = attempt.score === 100 ? '✨' : '';
+      shareText += `${bar}${emoji}\n`;
+    });
+    
+    shareText += `\n`;
+    
+    if (isWon) {
+      shareText += `Can you beat it?`;
+    } else {
+      shareText += `Can you solve it?`;
+    }
+    
+    return shareText;
+  };
+
+  const handleShare = async () => {
+    try {
+      const shareText = generateShareText();
+      
+      await Share.share({
+        message: shareText,
+      });
+    } catch (error) {
+      console.error('Error sharing:', error);
     }
   };
 
@@ -863,10 +1089,34 @@ export default function DoodleHuntScreen() {
       setGameWon(true);
       await completeGame('won');
       
+      // Update streak for winning today
+      await updateStreak();
+      
+      // Award XP with streak bonus
+      const xpResult = await xpService.awardDoodleHuntXP(true, attempts + 1, currentStreak, dispatch);
+      
+      let xpMessage = '';
+      if (xpResult) {
+        xpMessage = `\n\n+${xpResult.xp_earned} XP`;
+        if (xpResult.bonusXP && xpResult.bonusXP > 0) {
+          xpMessage += ` (${xpResult.baseXP} base + ${xpResult.bonusXP} streak bonus!)`;
+        }
+        if (xpResult.leveled_up) {
+          xpMessage += `\n🎉 Level Up! Now Level ${xpResult.new_level}!`;
+        }
+        if (xpResult.tier_up) {
+          xpMessage += `\n🏆 TIER UP! You reached a new tier!`;
+        }
+        // Track XP state for banner
+        setXpEarned(xpResult.xp_earned || 0);
+        setLeveledUp(!!xpResult.leveled_up);
+        setNewLevel(xpResult.new_level || 0);
+      }
+      
       // Show success message
       Alert.alert(
         'Congratulations!', 
-        `You won! The word was "${secretWord}". Your drawing scored ${score}%!`,
+        `You won! The word was "${secretWord}". Your drawing scored ${score}%!${xpMessage}`,
         [
           {
             text: 'Continue',
@@ -1284,10 +1534,17 @@ export default function DoodleHuntScreen() {
 
       {/* Completion Message */}
       {gameWon && (
+        <XPBanner xpEarned={xpEarned} leveledUp={leveledUp} newLevel={newLevel} />
+      )}
+
+      {gameLost && (
         <View style={styles.completionContainer}>
           <Text style={styles.completionMessage}>
-            🎉 You've completed today's Doodle Hunt Daily in {previousAttempts.length} guesses! Come back tomorrow for a new challenge.
+            😔 Game Over! The word was "{secretWord}". Better luck next time!
           </Text>
+          <TouchableOpacity style={styles.shareButton} onPress={handleShare}>
+            <Text style={styles.shareButtonText}>📤 Share Results</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -1439,129 +1696,17 @@ export default function DoodleHuntScreen() {
         
         {/* Tools Panel */}
         <View style={styles.sideControls}>
-          <View style={styles.controlsContent}>
-            <View style={styles.colorControls}>
-              <Text style={styles.controlLabel}>Colors</Text>
-              <View style={styles.colorRow}>
-                <TouchableOpacity
-                  style={[
-                    styles.colorButton, 
-                    { backgroundColor: '#000000' }, 
-                    brushColor === '#000000' && styles.selectedColor,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]}
-                  onPress={() => !gameWon && !gameLost && setBrushColor('#000000')}
-                  disabled={gameWon || gameLost}
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.colorButton, 
-                    { backgroundColor: '#FF0000' }, 
-                    brushColor === '#FF0000' && styles.selectedColor,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]}
-                  onPress={() => !gameWon && !gameLost && setBrushColor('#FF0000')}
-                  disabled={gameWon || gameLost}
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.colorButton, 
-                    { backgroundColor: '#00FF00' }, 
-                    brushColor === '#00FF00' && styles.selectedColor,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]}
-                  onPress={() => !gameWon && !gameLost && setBrushColor('#00FF00')}
-                  disabled={gameWon || gameLost}
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.colorButton, 
-                    { backgroundColor: '#0000FF' }, 
-                    brushColor === '#0000FF' && styles.selectedColor,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]}
-                  onPress={() => !gameWon && !gameLost && setBrushColor('#0000FF')}
-                  disabled={gameWon || gameLost}
-                />
-              </View>
-            </View>
-
-            <View style={styles.sizeControls}>
-              <Text style={styles.controlLabel}>Size</Text>
-              <TouchableOpacity
-                style={[
-                  styles.sizeButton, 
-                  brushSize === 2 && styles.selectedSize,
-                  (gameWon || gameLost) && styles.disabledControl
-                ]}
-                onPress={() => !gameWon && !gameLost && setBrushSize(2)}
-                disabled={gameWon || gameLost}
-              >
-                <Text style={styles.sizeButtonText}>Small</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.sizeButton, 
-                  brushSize === 3 && styles.selectedSize,
-                  (gameWon || gameLost) && styles.disabledControl
-                ]}
-                onPress={() => !gameWon && !gameLost && setBrushSize(3)}
-                disabled={gameWon || gameLost}
-              >
-                <Text style={styles.sizeButtonText}>Medium</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.sizeButton, 
-                  brushSize === 5 && styles.selectedSize,
-                  (gameWon || gameLost) && styles.disabledControl
-                ]}
-                onPress={() => !gameWon && !gameLost && setBrushSize(5)}
-                disabled={gameWon || gameLost}
-              >
-                <Text style={styles.sizeButtonText}>Large</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.actionControls}>
-              <Text style={styles.controlLabel}>Tools</Text>
-              <View style={styles.actionButtons}>
-                <TouchableOpacity
-                  style={[
-                    styles.actionButton, 
-                    isEraseMode && styles.selectedAction,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]}
-                  onPress={() => !gameWon && !gameLost && setIsEraseMode(!isEraseMode)}
-                  disabled={gameWon || gameLost}
-                >
-                  <Text style={styles.actionButtonText}>
-                    {isEraseMode ? '✏️ Draw' : '🧽 Erase'}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[
-                    styles.actionButton,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]} 
-                  onPress={() => !gameWon && !gameLost && undoLastStroke()}
-                  disabled={gameWon || gameLost}
-                >
-                  <Text style={styles.actionButtonText}>Undo</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[
-                    styles.actionButton,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]} 
-                  onPress={() => !gameWon && !gameLost && clearCanvas()}
-                  disabled={gameWon || gameLost}
-                >
-                  <Text style={styles.actionButtonText}>Clear</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
+          <DrawingToolsPalette
+            brushColor={brushColor}
+            onColorChange={setBrushColor}
+            brushSize={brushSize}
+            onSizeChange={setBrushSize}
+            isEraseMode={isEraseMode}
+            onToggleEraseMode={() => setIsEraseMode(!isEraseMode)}
+            onUndo={undoLastStroke}
+            onClear={clearCanvas}
+            disabled={gameWon || gameLost}
+          />
         </View>
       </Animated.View>
       )}
@@ -2048,5 +2193,19 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontWeight: '500',
     fontFamily: 'Nunito_600SemiBold',
+  },
+  shareButton: {
+    backgroundColor: '#4CAF50',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    marginTop: 12,
+    alignSelf: 'center',
+  },
+  shareButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+    fontFamily: 'Nunito_700Bold',
   },
 });

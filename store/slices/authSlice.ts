@@ -5,6 +5,9 @@ interface UserInfo {
   username: string;
   email: string;
   game_tokens?: number;
+  level?: number;
+  total_xp?: number;
+  tier?: number;
 }
 
 interface AuthState {

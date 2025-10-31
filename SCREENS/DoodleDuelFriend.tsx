@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Dimensions, PanResponder, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
+import DrawingToolsPalette from '../COMPONENTS/DrawingToolsPalette';
 import { supabase } from '../SUPABASE/supabaseConfig';
 import { compressImageToBase64 } from '../utils/imageCompression';
 
@@ -402,6 +403,12 @@ export default function DuelInProgressScreen() {
     setCurrentPoints([]);
   };
 
+  const undoLastStroke = () => {
+    if (paths.length > 0) {
+      setPaths(prev => prev.slice(0, -1));
+    }
+  };
+
   const generateSVGString = () => {
     const svgContent = `
       <svg width="100%" height="100%" viewBox="0 0 500 400" xmlns="http://www.w3.org/2000/svg">
@@ -573,8 +580,6 @@ export default function DuelInProgressScreen() {
     }
   };
 
-  const colors = ['#000000', '#FF0000', '#00FF00', '#0000FF'];
-
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -600,10 +605,23 @@ export default function DuelInProgressScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-            <Text style={styles.backButtonText}>← Back</Text>
-          </TouchableOpacity>
+        <View style={styles.headerContainer}>
+          <View style={styles.topRow}>
+            <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+              <Text style={styles.backButtonText}>← Back</Text>
+            </TouchableOpacity>
+            {!hasSubmitted && (
+              <TouchableOpacity 
+                style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]} 
+                onPress={handleSubmit}
+                disabled={isSubmitting}
+              >
+                <Text style={styles.submitButtonText}>
+                  {isSubmitting ? 'Submitting...' : 'Submit Drawing'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
           <Text style={styles.title}>Duel vs @{opponentUsername}</Text>
         </View>
         
@@ -622,22 +640,6 @@ export default function DuelInProgressScreen() {
                 {scoreMessage}
               </Text>
             )}
-          </View>
-        )}
-        
-        {/* Drawing Instructions and Submit Button - only show if not submitted yet */}
-        {!hasSubmitted && (
-          <View style={styles.drawingHeader}>
-            <Text style={styles.subtitle}>Draw this word!</Text>
-            <TouchableOpacity 
-              style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]} 
-              onPress={handleSubmit}
-              disabled={isSubmitting}
-            >
-              <Text style={styles.submitButtonText}>
-                {isSubmitting ? 'Submitting...' : 'Submit Drawing'}
-              </Text>
-            </TouchableOpacity>
           </View>
         )}
         
@@ -685,57 +687,18 @@ export default function DuelInProgressScreen() {
         {/* Drawing Tools - only show if not submitted yet */}
         {!hasSubmitted && (
           <View style={styles.toolsContainer}>
-          <View style={styles.colorPalette}>
-            {colors.map((color) => (
-              <TouchableOpacity
-                key={color}
-                style={[
-                  styles.colorButton,
-                  { backgroundColor: color },
-                  brushColor === color && styles.selectedColor
-                ]}
-                onPress={() => setBrushColor(color)}
-              />
-            ))}
+            <DrawingToolsPalette
+              brushColor={brushColor}
+              onColorChange={setBrushColor}
+              brushSize={brushSize}
+              onSizeChange={setBrushSize}
+              isEraseMode={isEraseMode}
+              onToggleEraseMode={() => setIsEraseMode(!isEraseMode)}
+              onUndo={undoLastStroke}
+              onClear={clearCanvas}
+              disabled={false}
+            />
           </View>
-          
-          <View style={styles.brushSizeContainer}>
-            <Text style={styles.brushSizeLabel}>Brush Size:</Text>
-            <TouchableOpacity
-              style={[styles.brushSizeButton, brushSize === 2 && styles.selectedBrushSize]}
-              onPress={() => setBrushSize(2)}
-            >
-              <View style={[styles.brushSizeIndicator, { width: 4, height: 4, backgroundColor: brushColor }]} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.brushSizeButton, brushSize === 3 && styles.selectedBrushSize]}
-              onPress={() => setBrushSize(3)}
-            >
-              <View style={[styles.brushSizeIndicator, { width: 8, height: 8, backgroundColor: brushColor }]} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.brushSizeButton, brushSize === 5 && styles.selectedBrushSize]}
-              onPress={() => setBrushSize(5)}
-            >
-              <View style={[styles.brushSizeIndicator, { width: 12, height: 12, backgroundColor: brushColor }]} />
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.actionButtons}>
-            <TouchableOpacity 
-              style={[styles.actionButton, isEraseMode && styles.activeActionButton]} 
-              onPress={() => setIsEraseMode(!isEraseMode)}
-            >
-              <Text style={[styles.actionButtonText, isEraseMode && styles.activeActionButtonText]}>
-                {isEraseMode ? '✏️ Draw' : '🧽 Erase'}
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.clearButton} onPress={clearCanvas}>
-              <Text style={styles.clearButtonText}>Clear</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
         )}
       </View>
     </SafeAreaView>
@@ -764,18 +727,20 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 20,
   },
-  header: {
+  headerContainer: {
+    marginBottom: 20,
+  },
+  topRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 10,
   },
   backButton: {
     backgroundColor: '#007AFF',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    marginRight: 10,
   },
   backButtonText: {
     color: '#fff',
@@ -786,7 +751,6 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
-    flex: 1,
     textAlign: 'center',
   },
   submitButton: {
@@ -832,18 +796,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     textTransform: 'uppercase',
     letterSpacing: 1,
-  },
-  drawingHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#666',
-    fontStyle: 'italic',
-    flex: 1,
   },
   canvasContainer: {
     width: screenWidth - 40,

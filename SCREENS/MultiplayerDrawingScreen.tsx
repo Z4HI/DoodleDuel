@@ -1,8 +1,9 @@
 import { useNavigation, useRoute } from '@react-navigation/native';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Dimensions, PanResponder, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Animated, Dimensions, PanResponder, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
+import DrawingToolsPalette from '../COMPONENTS/DrawingToolsPalette';
 import { supabase } from '../SUPABASE/supabaseConfig';
 import { compressImageToBase64 } from '../utils/imageCompression';
 
@@ -27,6 +28,11 @@ export default function MultiplayerDrawingScreen() {
   const [brushSize, setBrushSize] = useState(3);
   const [brushColor, setBrushColor] = useState('#000000');
   const [currentPoints, setCurrentPoints] = useState<Array<{ x: number; y: number }>>([]);
+  const [isEraseMode, setIsEraseMode] = useState(false);
+  
+  // Side controls animation
+  const [isControlsExpanded, setIsControlsExpanded] = useState(false);
+  const slideAnimation = useRef(new Animated.Value(0)).current;
   
   const svgRef = useRef<Svg>(null);
   const canvasRef = useRef<View>(null);
@@ -78,6 +84,20 @@ export default function MultiplayerDrawingScreen() {
                 console.log('Opponent has submitted their drawing!');
                 setOpponentSubmitted(true);
               }
+              
+              // Also check if match is completed (in case match update event didn't fire)
+              const { data: matchData, error: matchError } = await supabase
+                .from('matches')
+                .select('status')
+                .eq('id', matchId)
+                .single();
+              
+              if (matchData?.status === 'completed') {
+                console.log('Match is completed, navigating to results');
+                setTimeout(() => {
+                  navigation.navigate('MultiplayerResults' as never, { matchId } as never);
+                }, 500);
+              }
             }
           } catch (error) {
             console.error('Error checking opponent submission:', error);
@@ -93,11 +113,14 @@ export default function MultiplayerDrawingScreen() {
           table: 'matches',
           filter: `id=eq.${matchId}`
         },
-        (payload) => {
+        async (payload) => {
           console.log('Match status update:', payload);
           if (payload.new?.status === 'completed') {
             console.log('Match completed, navigating to results');
-            navigation.navigate('MultiplayerResults' as never, { matchId } as never);
+            // Small delay to ensure database has finalized rankings
+            setTimeout(() => {
+              navigation.navigate('MultiplayerResults' as never, { matchId } as never);
+            }, 500);
           }
         }
       )
@@ -115,22 +138,46 @@ export default function MultiplayerDrawingScreen() {
   const createSmoothPath = (points: Array<{ x: number; y: number }>) => {
     if (points.length < 2) return '';
     
-    let path = `M${points[0].x},${points[0].y}`;
+    // Validate first point
+    if (!isFinite(points[0].x) || !isFinite(points[0].y)) {
+      console.error('Invalid starting point:', points[0]);
+      return '';
+    }
+    
+    let path = `M${points[0].x.toFixed(2)},${points[0].y.toFixed(2)}`;
     
     for (let i = 1; i < points.length; i++) {
       const prev = points[i - 1];
       const curr = points[i];
       const next = points[i + 1];
       
+      // Validate current point
+      if (!isFinite(curr.x) || !isFinite(curr.y)) {
+        console.error('Invalid point at index', i, ':', curr);
+        continue;
+      }
+      
       if (next) {
+        // Validate next point
+        if (!isFinite(next.x) || !isFinite(next.y)) {
+          path += ` L${curr.x.toFixed(2)},${curr.y.toFixed(2)}`;
+          continue;
+        }
+        
         // Use quadratic curves for smooth lines
         const cp1x = prev.x + (curr.x - prev.x) * 0.5;
         const cp1y = prev.y + (curr.y - prev.y) * 0.5;
         const cp2x = curr.x - (next.x - curr.x) * 0.5;
         const cp2y = curr.y - (next.y - curr.y) * 0.5;
-        path += ` Q${cp1x},${cp1y} ${curr.x},${curr.y}`;
+        
+        // Validate control points
+        if (!isFinite(cp1x) || !isFinite(cp1y) || !isFinite(cp2x) || !isFinite(cp2y)) {
+          path += ` L${curr.x.toFixed(2)},${curr.y.toFixed(2)}`;
+        } else {
+          path += ` Q${cp1x.toFixed(2)},${cp1y.toFixed(2)} ${curr.x.toFixed(2)},${curr.y.toFixed(2)}`;
+        }
       } else {
-        path += ` L${curr.x},${curr.y}`;
+        path += ` L${curr.x.toFixed(2)},${curr.y.toFixed(2)}`;
       }
     }
     
@@ -143,15 +190,29 @@ export default function MultiplayerDrawingScreen() {
     onMoveShouldSetPanResponder: () => !isSubmitted,
     onPanResponderGrant: (evt) => {
       if (isSubmitted) return;
-      setIsDrawing(true);
       const { locationX, locationY } = evt.nativeEvent;
+      
+      // Validate coordinates
+      if (!isFinite(locationX) || !isFinite(locationY)) {
+        console.error('Invalid coordinates on grant:', { locationX, locationY });
+        return;
+      }
+      
+      setIsDrawing(true);
       const newPoint = { x: locationX, y: locationY };
       setCurrentPoints([newPoint]);
-      setCurrentPath(`M${locationX},${locationY}`);
+      setCurrentPath(`M${locationX.toFixed(2)},${locationY.toFixed(2)}`);
     },
     onPanResponderMove: (evt) => {
       if (!isDrawing || isSubmitted) return;
       const { locationX, locationY } = evt.nativeEvent;
+      
+      // Validate coordinates
+      if (!isFinite(locationX) || !isFinite(locationY)) {
+        console.error('Invalid coordinates on move:', { locationX, locationY });
+        return;
+      }
+      
       const newPoint = { x: locationX, y: locationY };
       setCurrentPoints(prev => [...prev, newPoint]);
       
@@ -179,6 +240,13 @@ export default function MultiplayerDrawingScreen() {
     setPaths([]);
     setCurrentPath('');
     setCurrentPoints([]);
+  };
+
+  const undoLastStroke = () => {
+    if (isSubmitted) return;
+    if (paths.length > 0) {
+      setPaths(prev => prev.slice(0, -1));
+    }
   };
 
   const handleSubmit = async () => {
@@ -243,8 +311,19 @@ export default function MultiplayerDrawingScreen() {
       console.log('Generated SVG URL:', urlData.publicUrl);
 
       // Call the scoring function (same as WordOfTheDayScreen and DuelInProgressScreen)
-      console.log('Calling AI scoring service...');
-      const scoreResponse = await fetch("https://qxqduzzqcivosdauqpis.functions.supabase.co/score-drawing", {
+      console.log('🎨 [MultiplayerDrawing] Calling AI scoring service...', {
+        matchId,
+        word,
+        userId: user.id,
+        base64Length: base64.length
+      });
+      
+      // Add timeout wrapper for fetch to prevent hanging
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Scoring request timed out after 30 seconds')), 30000);
+      });
+      
+      const fetchPromise = fetch("https://qxqduzzqcivosdauqpis.functions.supabase.co/score-drawing", {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
@@ -255,32 +334,75 @@ export default function MultiplayerDrawingScreen() {
           word: word
         })
       });
+      
+      const scoreResponse = await Promise.race([fetchPromise, timeoutPromise]) as Response;
 
-      if (!scoreResponse.ok) {
-        console.error('Score API error:', scoreResponse.status, scoreResponse.statusText);
-        Alert.alert('Scoring Error', 'Failed to score your drawing. Please try again.');
+      if (!scoreResponse || !scoreResponse.ok) {
+        const errorMessage = !scoreResponse 
+          ? 'Request timed out or failed'
+          : `${scoreResponse.status}: ${scoreResponse.statusText}`;
+        
+        console.error('❌ [MultiplayerDrawing] Score API error:', {
+          status: scoreResponse?.status,
+          statusText: scoreResponse?.statusText,
+          matchId,
+          word,
+          errorMessage
+        });
+        Alert.alert('Scoring Error', `Failed to score your drawing: ${errorMessage}. Please try again.`);
         setIsSubmitted(false);
         return;
       }
 
       const responseText = await scoreResponse.text();
+      console.log('📥 [MultiplayerDrawing] AI Response (raw):', {
+        matchId,
+        word,
+        responseLength: responseText.length,
+        responsePreview: responseText.substring(0, 200)
+      });
+      
       let scoreData;
       try {
         scoreData = JSON.parse(responseText);
+        console.log('✅ [MultiplayerDrawing] AI Response (parsed):', {
+          matchId,
+          word,
+          scoreData: JSON.stringify(scoreData, null, 2)
+        });
       } catch (parseError) {
-        console.error('JSON parse error:', parseError);
+        console.error('❌ [MultiplayerDrawing] JSON parse error:', {
+          matchId,
+          word,
+          error: parseError,
+          responseText: responseText.substring(0, 500)
+        });
         Alert.alert('Scoring Error', 'Invalid response from scoring service. Please try again.');
         setIsSubmitted(false);
         return;
       }
 
-      console.log("Similarity score:", scoreData.score);
-      console.log("Score message:", scoreData.message);
-
       const aiScore = scoreData.score || 0;
       const aiMessage = scoreData.message || 'Drawing scored successfully';
+      
+      console.log('🎯 [MultiplayerDrawing] AI Scoring Results:', {
+        matchId,
+        word,
+        userId: user.id,
+        score: aiScore,
+        message: aiMessage,
+        fullResponse: scoreData
+      });
 
       // Submit the drawing with AI score to the match
+      console.log('📤 [MultiplayerDrawing] Submitting to matchmaking function...', {
+        matchId,
+        word,
+        userId: user.id,
+        aiScore,
+        aiMessage: aiMessage?.substring(0, 50)
+      });
+      
       const { data, error } = await supabase.functions.invoke('matchmaking', {
         body: {
           action: 'submit_match_drawing',
@@ -291,20 +413,85 @@ export default function MultiplayerDrawingScreen() {
         }
       });
 
+      console.log('📥 [MultiplayerDrawing] Matchmaking response:', {
+        matchId,
+        word,
+        userId: user.id,
+        hasError: !!error,
+        error: error ? {
+          message: error.message,
+          name: error.name,
+          details: error
+        } : null,
+        hasData: !!data,
+        data: data ? JSON.stringify(data).substring(0, 200) : null
+      });
+
       if (error) {
-        console.error('Error submitting drawing:', error);
-        Alert.alert('Error', 'Failed to submit drawing. Please try again.');
+        console.error('❌ [MultiplayerDrawing] Error submitting drawing:', {
+          matchId,
+          word,
+          userId: user.id,
+          error: {
+            message: error.message,
+            name: error.name,
+            status: error.status,
+            details: error
+          }
+        });
+        Alert.alert('Error', `Failed to submit drawing: ${error.message || 'Unknown error'}. Please try again.`);
+        setIsSubmitted(false);
+        return;
+      }
+
+      if (!data) {
+        console.error('❌ [MultiplayerDrawing] No data in response:', {
+          matchId,
+          word,
+          userId: user.id
+        });
+        Alert.alert('Submission Error', 'No response from server. Please try again.');
         setIsSubmitted(false);
         return;
       }
 
       if (data.success) {
-        console.log('Drawing submitted successfully with score:', aiScore);
-        // Navigate to results screen
-        navigation.navigate('MultiplayerResults' as never, { matchId: matchId } as never);
+        console.log('✅ [MultiplayerDrawing] Drawing submitted successfully:', {
+          matchId,
+          word,
+          userId: user.id,
+          score: aiScore,
+          message: aiMessage,
+          drawingId: data.drawing_id
+        });
+        // Don't navigate immediately - wait for match to complete via realtime subscription
+        // The realtime subscription will handle navigation when match status becomes 'completed'
+      } else {
+        console.error('❌ [MultiplayerDrawing] Submission failed:', {
+          matchId,
+          word,
+          userId: user.id,
+          score: aiScore,
+          error: data.error,
+          details: data.details,
+          fullResponse: data
+        });
+        const errorMessage = data.error || data.details || 'Unknown error';
+        Alert.alert('Submission Error', `Failed to submit drawing: ${errorMessage}. Please try again.`);
+        setIsSubmitted(false);
+        return;
       }
     } catch (error) {
-      console.error('Error in handleSubmit:', error);
+      console.error('❌ [MultiplayerDrawing] Error in handleSubmit:', {
+        matchId,
+        word,
+        userId: user?.id,
+        error: error instanceof Error ? {
+          message: error.message,
+          stack: error.stack,
+          name: error.name
+        } : error
+      });
       Alert.alert('Error', 'Something went wrong. Please try again.');
       setIsSubmitted(false);
     }
@@ -333,18 +520,38 @@ export default function MultiplayerDrawingScreen() {
             height={height - 400}
             style={styles.svg}
           >
-            {paths.map((pathData, index) => (
-              <Path
-                key={index}
-                d={pathData.path}
-                stroke={pathData.color}
-                strokeWidth={pathData.strokeWidth}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            ))}
-            {currentPath && (
+            {paths.map((pathData, index) => {
+              // Validate path data before rendering
+              if (!pathData?.path || typeof pathData.path !== 'string') {
+                console.warn('Invalid path at index:', index, pathData);
+                return null;
+              }
+              
+              // Check if path contains invalid values
+              if (pathData.path.includes('NaN') || pathData.path.includes('Infinity')) {
+                console.warn('Path contains invalid numbers at index:', index);
+                return null;
+              }
+              
+              // Check if path has valid format (M for move, L for line, Q for curve)
+              if (!pathData.path.match(/^M[\d\.\-,\sLQ]+/)) {
+                console.warn('Path does not have valid format at index:', index);
+                return null;
+              }
+              
+              return (
+                <Path
+                  key={index}
+                  d={pathData.path}
+                  stroke={pathData.color || '#000000'}
+                  strokeWidth={pathData.strokeWidth || 3}
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              );
+            })}
+            {currentPath && !currentPath.includes('NaN') && !currentPath.includes('Infinity') && (
               <Path
                 d={currentPath}
                 stroke={brushColor}
@@ -358,53 +565,58 @@ export default function MultiplayerDrawingScreen() {
         </View>
       </View>
 
-      {/* Brush Controls */}
-      <View style={styles.brushControls}>
-        <Text style={styles.brushLabel}>Brush Size:</Text>
-        <View style={styles.brushSizeContainer}>
-          {[1, 3, 5, 8, 12].map((size) => (
-            <TouchableOpacity
-              key={size}
-              style={[
-                styles.brushSizeButton,
-                brushSize === size && styles.brushSizeButtonActive
-              ]}
-              onPress={() => setBrushSize(size)}
-            >
-              <View style={[styles.brushSizeIndicator, { 
-                width: size * 2, 
-                height: size * 2, 
-                backgroundColor: brushColor 
-              }]} />
-            </TouchableOpacity>
-          ))}
-        </View>
-        
-        <Text style={styles.brushLabel}>Colors:</Text>
-        <View style={styles.colorContainer}>
-          {['#000000', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'].map((color) => (
-            <TouchableOpacity
-              key={color}
-              style={[
-                styles.colorButton,
-                { backgroundColor: color },
-                brushColor === color && styles.colorButtonActive
-              ]}
-              onPress={() => setBrushColor(color)}
+      {/* Side Controls Panel - Only show when not submitted */}
+      {!isSubmitted && (
+        <Animated.View 
+          style={[
+            styles.controlsContainer,
+            {
+              transform: [{
+                translateX: slideAnimation.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [200, 0], // Slide from off-screen (200px) to visible (0px)
+                })
+              }],
+            }
+          ]}
+        >
+          {/* Toggle Button - Moves with panel */}
+          <TouchableOpacity
+            style={styles.controlsToggle}
+            onPress={() => {
+              const newExpanded = !isControlsExpanded;
+              setIsControlsExpanded(newExpanded);
+              
+              Animated.timing(slideAnimation, {
+                toValue: newExpanded ? 1 : 0,
+                duration: 300,
+                useNativeDriver: false,
+              }).start();
+            }}
+          >
+            <Text style={styles.controlsToggleText}>
+              {isControlsExpanded ? '✕' : '🎨'}
+            </Text>
+          </TouchableOpacity>
+          
+          {/* Tools Panel */}
+          <View style={styles.sideControls}>
+            <DrawingToolsPalette
+              brushColor={brushColor}
+              onColorChange={setBrushColor}
+              brushSize={brushSize}
+              onSizeChange={setBrushSize}
+              isEraseMode={isEraseMode}
+              onToggleEraseMode={() => setIsEraseMode(!isEraseMode)}
+              onUndo={undoLastStroke}
+              onClear={clearDrawing}
+              disabled={isSubmitted}
             />
-          ))}
-        </View>
-      </View>
+          </View>
+        </Animated.View>
+      )}
 
       <View style={styles.controls}>
-        <TouchableOpacity 
-          style={[styles.clearButton, isSubmitted && styles.buttonDisabled]} 
-          onPress={clearDrawing}
-          disabled={isSubmitted}
-        >
-          <Text style={styles.clearButtonText}>🗑️ Clear</Text>
-        </TouchableOpacity>
-
         <TouchableOpacity 
           style={[
             styles.submitButton, 
@@ -430,7 +642,11 @@ export default function MultiplayerDrawingScreen() {
 
       <View style={styles.statusContainer}>
         <Text style={styles.statusText}>
-          {isSubmitted ? 'Drawing submitted! Waiting for results...' : 'Draw the word above!'}
+          {isSubmitted 
+            ? opponentSubmitted 
+              ? 'Both drawings submitted! Calculating results...' 
+              : 'Drawing submitted! Waiting for opponent...'
+            : 'Draw the word above!'}
         </Text>
       </View>
     </SafeAreaView>
@@ -478,73 +694,42 @@ const styles = StyleSheet.create({
   svg: {
     backgroundColor: '#fff',
   },
-  brushControls: {
-    backgroundColor: '#f8f9fa',
-    padding: 15,
-    marginHorizontal: 20,
-    borderRadius: 8,
-    marginBottom: 10,
-  },
-  brushLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 8,
-  },
-  brushSizeContainer: {
+  controlsContainer: {
+    position: 'absolute',
+    right: 0,
+    top: '50%',
+    marginTop: -100,
+    zIndex: 1000,
     flexDirection: 'row',
-    marginBottom: 15,
-    justifyContent: 'space-around',
   },
-  brushSizeButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#fff',
-    borderWidth: 2,
-    borderColor: '#ddd',
+  controlsToggle: {
+    width: 50,
+    height: 50,
+    backgroundColor: '#007AFF',
+    borderTopLeftRadius: 15,
+    borderBottomLeftRadius: 15,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  brushSizeButtonActive: {
-    borderColor: '#007AFF',
-    backgroundColor: '#E3F2FD',
+  controlsToggleText: {
+    fontSize: 20,
   },
-  brushSizeIndicator: {
-    borderRadius: 50,
-  },
-  colorContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-  },
-  colorButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    borderWidth: 2,
-    borderColor: '#ddd',
-  },
-  colorButtonActive: {
-    borderColor: '#007AFF',
-    borderWidth: 3,
+  sideControls: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 15,
+    borderBottomLeftRadius: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: -2, height: 0 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+    width: 200,
   },
   controls: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    justifyContent: 'center',
     padding: 20,
     backgroundColor: '#f8f9fa',
-  },
-  clearButton: {
-    backgroundColor: '#FF9500',
-    borderRadius: 8,
-    padding: 12,
-    minWidth: 100,
-    alignItems: 'center',
-  },
-  clearButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
   },
   submitButton: {
     backgroundColor: '#34C759',

@@ -1,11 +1,15 @@
 import { useNavigation } from '@react-navigation/native';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Dimensions, PanResponder, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Animated, Dimensions, PanResponder, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
+import ViewShot from 'react-native-view-shot';
+import DrawingToolsPalette from '../COMPONENTS/DrawingToolsPalette';
 import { useRewardedAd } from '../COMPONENTS/RewardedAd';
+import XPBanner from '../COMPONENTS/XPBanner';
 import { useAppDispatch } from '../store/hooks';
 import { authService } from '../store/services/authService';
+import { xpService } from '../store/services/xpService';
 import { supabase } from '../SUPABASE/supabaseConfig';
 import { compressImageToBase64 } from '../utils/imageCompression';
 
@@ -15,11 +19,13 @@ export default function WordOfTheDayScreen() {
   const navigation = useNavigation();
   const dispatch = useAppDispatch();
   const canvasRef = useRef<View>(null);
+  const shareViewRef = useRef<ViewShot>(null);
   
   // Word of the day state
   const [wordOfTheDay, setWordOfTheDay] = useState<string>('');
   const [isLoadingWord, setIsLoadingWord] = useState(true);
   const [wordError, setWordError] = useState<string | null>(null);
+  const [currentStreak, setCurrentStreak] = useState<number>(0);
   
   // Drawing state
   const [paths, setPaths] = useState<Array<{ path: string; color: string; strokeWidth: number }>>([]);
@@ -33,14 +39,99 @@ export default function WordOfTheDayScreen() {
   const [scoreMessage, setScoreMessage] = useState<string | null>(null);
   const [isEraseMode, setIsEraseMode] = useState(false);
   const [erasePaths, setErasePaths] = useState<Array<{ path: string; strokeWidth: number }>>([]);
+  
+  // Side controls animation
+  const [isControlsExpanded, setIsControlsExpanded] = useState(false);
+  const slideAnimation = useRef(new Animated.Value(0)).current;
 
   // Rewarded Ad
   const { showAd: showRewardedAd, isLoaded, isLoading } = useRewardedAd();
 
-  // Fetch word of the day when component mounts
+  // XP Banner state
+  const [leveledUp, setLeveledUp] = useState(false);
+  const [newLevel, setNewLevel] = useState<number>(0);
+  const [xpEarned, setXpEarned] = useState<number>(0);
+
+  // Fetch word of the day and streak when component mounts
   useEffect(() => {
     fetchWordOfTheDay();
+    fetchStreak();
   }, []);
+
+  // Fetch current streak
+  const fetchStreak = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('word_of_day_streak')
+        .eq('id', user.id)
+        .single();
+
+      if (profile) {
+        setCurrentStreak(profile.word_of_day_streak || 0);
+      }
+    } catch (error) {
+      console.error('Error fetching streak:', error);
+    }
+  };
+
+  // Update streak when playing
+  const updateStreak = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const today = new Date().toISOString().split('T')[0];
+
+      // Get current profile data
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('word_of_day_streak, last_word_of_day_date')
+        .eq('id', user.id)
+        .single();
+
+      if (!profile) return;
+
+      const lastDate = profile.last_word_of_day_date;
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+      let newStreak = 0;
+
+      if (lastDate === today) {
+        // Already played today, keep current streak
+        newStreak = profile.word_of_day_streak || 0;
+      } else if (lastDate === yesterdayStr) {
+        // Played yesterday, increment streak
+        newStreak = (profile.word_of_day_streak || 0) + 1;
+      } else if (!lastDate) {
+        // First time ever playing
+        newStreak = 1;
+      } else {
+        // Gap in playing, reset to 0
+        newStreak = 0;
+      }
+
+      // Update database
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          word_of_day_streak: newStreak,
+          last_word_of_day_date: today
+        })
+        .eq('id', user.id);
+
+      if (!error) {
+        setCurrentStreak(newStreak);
+      }
+    } catch (error) {
+      console.error('Error updating streak:', error);
+    }
+  };
 
   // Load previous drawing for current word and same day
   const loadPreviousDrawing = async (word: string) => {
@@ -291,6 +382,12 @@ export default function WordOfTheDayScreen() {
     setCurrentPoints([]);
   };
 
+  const undoLastStroke = () => {
+    if (paths.length > 0) {
+      setPaths(prev => prev.slice(0, -1));
+    }
+  };
+
   const generateSVGString = () => {
     const svgContent = `
       <svg width="100%" height="100%" viewBox="0 0 500 400" xmlns="http://www.w3.org/2000/svg">
@@ -368,10 +465,34 @@ export default function WordOfTheDayScreen() {
       setScore(scoreData.score);
       setScoreMessage(scoreData.message);
 
+      // Update streak for playing today
+      await updateStreak();
+
+      // Award XP with streak bonus
+      const xpResult = await xpService.awardWordOfDayXP(scoreData.score, currentStreak, dispatch);
+      
+      let xpMessage = '';
+      if (xpResult) {
+        xpMessage = `\n\n+${xpResult.xp_earned} XP`;
+        if (xpResult.bonusXP && xpResult.bonusXP > 0) {
+          xpMessage += ` (${xpResult.baseXP} base + ${xpResult.bonusXP} streak bonus!)`;
+        }
+        if (xpResult.leveled_up) {
+          xpMessage += `\n🎉 Level Up! Now Level ${xpResult.new_level}!`;
+        }
+        if (xpResult.tier_up) {
+          xpMessage += `\n🏆 TIER UP! You reached a new tier!`;
+        }
+        // Track XP state for banner
+        setXpEarned(xpResult.xp_earned || 0);
+        setLeveledUp(!!xpResult.leveled_up);
+        setNewLevel(xpResult.new_level || 0);
+      }
+
       // Show score alert with continue option that triggers rewarded ad
       Alert.alert(
         'Drawing Complete!',
-        `Your drawing scored ${scoreData.score}%!\n\n${scoreData.message}`,
+        `Your drawing scored ${scoreData.score}%!\n\n${scoreData.message}${xpMessage}`,
         [
           {
             text: 'Continue',
@@ -467,7 +588,43 @@ export default function WordOfTheDayScreen() {
     }
   };
 
-  const colors = ['#000000', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'];
+  const generateProgressBar = (score: number): string => {
+    // Generate 10 blocks for the progress bar
+    const filledBlocks = Math.floor(score / 10);
+    const emptyBlocks = 10 - filledBlocks;
+    
+    // Determine color based on score
+    let colorBlock = '🟥'; // Red for 0-49%
+    if (score >= 80) colorBlock = '🟩'; // Green for 80-100%
+    else if (score >= 50) colorBlock = '🟨'; // Yellow for 50-79%
+    
+    return colorBlock.repeat(filledBlocks) + '⬜'.repeat(emptyBlocks);
+  };
+
+  const handleShare = async () => {
+    if (!shareViewRef.current || score === null) return;
+
+    try {
+      // Capture the share view as an image
+      const uri = await shareViewRef.current.capture();
+      
+      // Build the share message
+      const progressBar = generateProgressBar(score);
+      let message = `🎨 Word of the Day - ${wordOfTheDay}\n\n`;
+      message += `My Score: ${score}%\n`;
+      message += `${progressBar}\n\n`;
+      message += `Can you beat my score? 🎯`;
+      
+      // Share the image with message
+      await Share.share({
+        url: uri,
+        message: message,
+      });
+    } catch (error) {
+      console.error('Error sharing:', error);
+      Alert.alert('Share Error', 'Failed to share your drawing. Please try again.');
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -520,8 +677,14 @@ export default function WordOfTheDayScreen() {
             <Text style={styles.completionMessage}>
               🎉 You've completed today's Word of the Day! Come back tomorrow for a new challenge.
             </Text>
+            <TouchableOpacity style={styles.shareButton} onPress={handleShare}>
+              <Text style={styles.shareButtonText}>📤 Share My Drawing</Text>
+            </TouchableOpacity>
           </View>
         )}
+
+        {/* XP Banner */}
+        <XPBanner xpEarned={xpEarned} leveledUp={leveledUp} newLevel={newLevel} />
         
         {/* Drawing Canvas */}
         <View style={styles.canvasContainer}>
@@ -555,61 +718,102 @@ export default function WordOfTheDayScreen() {
           </View>
         </View>
 
-        {/* Drawing Tools - only show if not completed */}
-        {score === null && (
-          <View style={styles.toolsContainer}>
-            <View style={styles.colorPalette}>
-              {colors.map((color) => (
-                <TouchableOpacity
-                  key={color}
-                  style={[
-                    styles.colorButton,
-                    { backgroundColor: color },
-                    brushColor === color && styles.selectedColor
-                  ]}
-                  onPress={() => setBrushColor(color)}
-                />
-              ))}
-            </View>
-            
-            <View style={styles.brushSizeContainer}>
-              <Text style={styles.brushSizeLabel}>Brush Size:</Text>
-              <TouchableOpacity
-                style={[styles.brushSizeButton, brushSize === 1 && styles.selectedBrushSize]}
-                onPress={() => setBrushSize(1)}
-              >
-                <View style={[styles.brushSizeIndicator, { width: 4, height: 4, backgroundColor: brushColor }]} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.brushSizeButton, brushSize === 3 && styles.selectedBrushSize]}
-                onPress={() => setBrushSize(3)}
-              >
-                <View style={[styles.brushSizeIndicator, { width: 8, height: 8, backgroundColor: brushColor }]} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.brushSizeButton, brushSize === 5 && styles.selectedBrushSize]}
-                onPress={() => setBrushSize(5)}
-              >
-                <View style={[styles.brushSizeIndicator, { width: 12, height: 12, backgroundColor: brushColor }]} />
-              </TouchableOpacity>
-            </View>
-            
-            <View style={styles.actionButtons}>
-              <TouchableOpacity 
-                style={[styles.actionButton, isEraseMode && styles.activeActionButton]} 
-                onPress={() => setIsEraseMode(!isEraseMode)}
-              >
-                <Text style={[styles.actionButtonText, isEraseMode && styles.activeActionButtonText]}>
-                  {isEraseMode ? '✏️ Draw' : '🧽 Erase'}
-                </Text>
-              </TouchableOpacity>
+      </View>
+      
+      {/* Side Controls Panel - Only show when not completed */}
+      {score === null && (
+        <Animated.View 
+          style={[
+            styles.controlsContainer,
+            {
+              transform: [{
+                translateX: slideAnimation.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [200, 0], // Slide from off-screen (200px) to visible (0px)
+                })
+              }],
+            }
+          ]}
+        >
+          {/* Toggle Button - Moves with panel */}
+          <TouchableOpacity
+            style={styles.controlsToggle}
+            onPress={() => {
+              const newExpanded = !isControlsExpanded;
+              setIsControlsExpanded(newExpanded);
               
-              <TouchableOpacity style={styles.clearButton} onPress={clearCanvas}>
-                <Text style={styles.clearButtonText}>Clear</Text>
-              </TouchableOpacity>
-            </View>
+              Animated.timing(slideAnimation, {
+                toValue: newExpanded ? 1 : 0,
+                duration: 300,
+                useNativeDriver: false,
+              }).start();
+            }}
+          >
+            <Text style={styles.controlsToggleText}>
+              {isControlsExpanded ? '✕' : '🎨'}
+            </Text>
+          </TouchableOpacity>
+          
+          {/* Tools Panel */}
+          <View style={styles.sideControls}>
+            <DrawingToolsPalette
+              brushColor={brushColor}
+              onColorChange={setBrushColor}
+              brushSize={brushSize}
+              onSizeChange={setBrushSize}
+              isEraseMode={isEraseMode}
+              onToggleEraseMode={() => setIsEraseMode(!isEraseMode)}
+              onUndo={undoLastStroke}
+              onClear={clearCanvas}
+              disabled={false}
+            />
           </View>
-        )}
+        </Animated.View>
+      )}
+
+      {/* Hidden ViewShot for sharing - positioned off-screen */}
+      <View style={styles.hiddenContainer}>
+        <ViewShot ref={shareViewRef} options={{ format: "png", quality: 0.9 }}>
+          <View style={styles.shareCompositeView}>
+            {/* Header */}
+            <View style={styles.shareHeader}>
+              <Text style={styles.shareTitle}>🎨 Word of the Day</Text>
+              <Text style={styles.shareDate}>{new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
+            </View>
+
+            {/* Word Label - Above Drawing */}
+            <View style={styles.shareWordSection}>
+              <Text style={styles.shareWordLabel}>"{wordOfTheDay}"</Text>
+            </View>
+
+            {/* Drawing Area */}
+            <View style={styles.shareDrawingContainer}>
+              <Svg width={300} height={300} viewBox="0 0 400 400">
+                {paths.map((pathData, pathIndex) => (
+                  <Path
+                    key={pathIndex}
+                    d={pathData.path}
+                    stroke={pathData.color}
+                    strokeWidth={pathData.strokeWidth}
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                ))}
+              </Svg>
+            </View>
+
+            {/* AI Feedback - Below Drawing */}
+            {scoreMessage && (
+              <View style={styles.shareAISection}>
+                <Text style={styles.shareAILabel}>💬 AI Feedback:</Text>
+                <Text style={styles.shareAIMessage} numberOfLines={3}>
+                  {scoreMessage.length > 150 ? scoreMessage.substring(0, 150) + '...' : scoreMessage}
+                </Text>
+              </View>
+            )}
+          </View>
+        </ViewShot>
       </View>
     </SafeAreaView>
   );
@@ -726,90 +930,37 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  toolsContainer: {
-    backgroundColor: '#f8f9fa',
-    borderRadius: 12,
-    padding: 15,
-    borderWidth: 1,
-    borderColor: '#e9ecef',
-  },
-  colorPalette: {
+  // Side Controls Panel
+  controlsContainer: {
+    position: 'absolute',
+    right: 0,
+    top: '50%',
+    marginTop: -100,
+    zIndex: 1000,
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: 15,
   },
-  colorButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    borderWidth: 2,
-    borderColor: 'transparent',
-  },
-  selectedColor: {
-    borderColor: '#007AFF',
-    borderWidth: 3,
-  },
-  brushSizeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 15,
-  },
-  brushSizeLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-    marginRight: 10,
-  },
-  brushSizeButton: {
-    padding: 8,
-    marginHorizontal: 5,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: 'transparent',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  selectedBrushSize: {
-    borderColor: '#007AFF',
-  },
-  brushSizeIndicator: {
-    borderRadius: 50,
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  actionButton: {
+  controlsToggle: {
+    width: 50,
+    height: 50,
     backgroundColor: '#007AFF',
-    borderRadius: 8,
-    padding: 12,
-    flex: 1,
+    borderTopLeftRadius: 15,
+    borderBottomLeftRadius: 15,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  activeActionButton: {
-    backgroundColor: '#34C759',
+  controlsToggleText: {
+    fontSize: 20,
   },
-  actionButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  activeActionButtonText: {
-    color: '#fff',
-  },
-  clearButton: {
-    backgroundColor: '#FF3B30',
-    borderRadius: 8,
-    padding: 12,
-    flex: 1,
-    alignItems: 'center',
-  },
-  clearButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+  sideControls: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 15,
+    borderBottomLeftRadius: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: -2, height: 0 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+    width: 200,
   },
   scoreContainer: {
     backgroundColor: '#e8f5e8',
@@ -846,5 +997,97 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontWeight: '500',
     fontFamily: 'Nunito_600SemiBold',
+  },
+  shareButton: {
+    backgroundColor: '#34C759',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    marginTop: 12,
+    alignSelf: 'center',
+  },
+  shareButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    fontFamily: 'Nunito_700Bold',
+  },
+  // Hidden container for ViewShot
+  hiddenContainer: {
+    position: 'absolute',
+    left: -9999,
+    top: -9999,
+  },
+  shareCompositeView: {
+    width: 340,
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    borderRadius: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+  },
+  shareHeader: {
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 2,
+    borderBottomColor: '#E5E5E5',
+  },
+  shareTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#333',
+    fontFamily: 'Nunito_700Bold',
+  },
+  shareDate: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 4,
+    fontFamily: 'Nunito_400Regular',
+  },
+  shareDrawingContainer: {
+    alignItems: 'center',
+    backgroundColor: '#F8F8F8',
+    borderRadius: 12,
+    padding: 8,
+    marginBottom: 12,
+    borderWidth: 2,
+    borderColor: '#E5E5E5',
+  },
+  shareWordSection: {
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#F0F9FF',
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  shareWordLabel: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#333',
+    fontFamily: 'Nunito_700Bold',
+  },
+  shareAISection: {
+    backgroundColor: '#FFF9E6',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FFE082',
+  },
+  shareAILabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+    marginBottom: 6,
+    fontFamily: 'Nunito_600SemiBold',
+  },
+  shareAIMessage: {
+    fontSize: 13,
+    color: '#333',
+    lineHeight: 18,
+    fontFamily: 'Nunito_400Regular',
   },
 });

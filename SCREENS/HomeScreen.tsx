@@ -12,6 +12,7 @@ import { usePushNotifications } from '../NOTIFICATIONS/usePushNotifications';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { authService } from '../store/services/authService';
 import { supabase } from '../SUPABASE/supabaseConfig';
+import { getStreakMultiplier } from '../utils/tierUtils';
 
 export default function HomeScreen() {
   const navigation = useNavigation();
@@ -25,6 +26,8 @@ export default function HomeScreen() {
   const [doodleOfTheDayCompleted, setDoodleOfTheDayCompleted] = useState(false);
   const [doodleHuntDailyCompleted, setDoodleHuntDailyCompleted] = useState(false);
   const [dailyChecksLoading, setDailyChecksLoading] = useState(true);
+  const [wordOfDayStreak, setWordOfDayStreak] = useState<number>(0);
+  const [doodleHuntStreak, setDoodleHuntStreak] = useState<number>(0);
   
   // Set up push notifications
   const { expoPushToken } = usePushNotifications(true);
@@ -72,13 +75,113 @@ export default function HomeScreen() {
     );
   };
 
+  // Function to fetch streaks
+  const fetchStreaks = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('word_of_day_streak, doodle_hunt_streak, last_word_of_day_date, last_doodle_hunt_date')
+        .eq('id', user.id)
+        .single();
+
+      if (profile) {
+        const today = new Date().toISOString().split('T')[0];
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+        console.log('HomeScreen fetchStreaks debug:', {
+          today,
+          wordOfDayLastDate: profile.last_word_of_day_date,
+          doodleHuntLastDate: profile.last_doodle_hunt_date,
+          yesterdayStr,
+          wordOfDayStreak: profile.word_of_day_streak,
+          doodleHuntStreak: profile.doodle_hunt_streak
+        });
+
+        // Check Word of Day streak
+        let wordOfDayStreak = 0;
+        if (profile.last_word_of_day_date === today) {
+          // Played today, show current streak
+          wordOfDayStreak = profile.word_of_day_streak || 0;
+          console.log('Word of Day: Played today, streak:', wordOfDayStreak);
+        } else if (profile.last_word_of_day_date === yesterdayStr) {
+          // Played yesterday, streak is still valid
+          wordOfDayStreak = profile.word_of_day_streak || 0;
+          console.log('Word of Day: Played yesterday, streak:', wordOfDayStreak);
+        } else if (!profile.last_word_of_day_date) {
+          // Never played
+          wordOfDayStreak = 0;
+          console.log('Word of Day: Never played, streak:', wordOfDayStreak);
+        } else {
+          // Gap in playing, streak is broken - reset in database
+          console.log('Word of Day: Gap detected, resetting streak from', profile.word_of_day_streak, 'to 0');
+          wordOfDayStreak = 0;
+          
+          // Update database to reset streak
+          const { error: wordError } = await supabase
+            .from('profiles')
+            .update({ word_of_day_streak: 0 })
+            .eq('id', user.id);
+          
+          if (wordError) {
+            console.error('Error resetting Word of Day streak:', wordError);
+          } else {
+            console.log('Successfully reset Word of Day streak to 0');
+          }
+        }
+
+        // Check Doodle Hunt streak
+        let doodleHuntStreak = 0;
+        if (profile.last_doodle_hunt_date === today) {
+          // Played today, show current streak
+          doodleHuntStreak = profile.doodle_hunt_streak || 0;
+          console.log('Doodle Hunt: Played today, streak:', doodleHuntStreak);
+        } else if (profile.last_doodle_hunt_date === yesterdayStr) {
+          // Played yesterday, streak is still valid
+          doodleHuntStreak = profile.doodle_hunt_streak || 0;
+          console.log('Doodle Hunt: Played yesterday, streak:', doodleHuntStreak);
+        } else if (!profile.last_doodle_hunt_date) {
+          // Never played
+          doodleHuntStreak = 0;
+          console.log('Doodle Hunt: Never played, streak:', doodleHuntStreak);
+        } else {
+          // Gap in playing, streak is broken - reset in database
+          console.log('Doodle Hunt: Gap detected, resetting streak from', profile.doodle_hunt_streak, 'to 0');
+          doodleHuntStreak = 0;
+          
+          // Update database to reset streak
+          const { error: huntError } = await supabase
+            .from('profiles')
+            .update({ doodle_hunt_streak: 0 })
+            .eq('id', user.id);
+          
+          if (huntError) {
+            console.error('Error resetting Doodle Hunt streak:', huntError);
+          } else {
+            console.log('Successfully reset Doodle Hunt streak to 0');
+          }
+        }
+
+        setWordOfDayStreak(wordOfDayStreak);
+        setDoodleHuntStreak(doodleHuntStreak);
+      }
+    } catch (error) {
+      console.error('Error fetching streaks:', error);
+    }
+  };
+
   // Function to run all daily completion checks
   const runDailyCompletionChecks = async () => {
     setDailyChecksLoading(true);
     try {
       await Promise.all([
         checkDoodleOfTheDayCompletion(),
-        checkDoodleHuntDailyCompletion()
+        checkDoodleHuntDailyCompletion(),
+        fetchStreaks()
       ]);
     } catch (error) {
       console.error('HomeScreen: Error running daily completion checks:', error);
@@ -290,7 +393,17 @@ export default function HomeScreen() {
   // Refresh notification count, dash level, and daily completion status when screen comes into focus
   useFocusEffect(
     React.useCallback(() => {
-      console.log('HomeScreen focused, refreshing notification count...');
+      console.log('HomeScreen focused, refreshing user data and notifications...');
+      
+      // Refresh user info to get latest XP/level/tier
+      const refreshUserData = async () => {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          dispatch(authService.fetchUserInfo(session));
+        }
+      };
+      
+      refreshUserData();
       countUnacceptedChallenges();
       getDashCurrentLevel();
       runDailyCompletionChecks();
@@ -426,14 +539,16 @@ export default function HomeScreen() {
             {userInfo && (
               <Text style={styles.usernameText}>@{userInfo.username}</Text>
             )}
-            <ProfileIcon onPress={openProfileModal} />
+            <ProfileIcon 
+              onPress={openProfileModal} 
+              tier={userInfo?.tier || 1}
+            />
           </View>
         </View>
       </View>
       
       <View style={styles.content}>
         <Text style={styles.title}>Welcome to Doodle Duel!</Text>
-        <Text style={styles.subtitle}>This is your home screen</Text>
         
         {/* Daily Games Section */}
         <View style={styles.dailySection}>
@@ -449,6 +564,17 @@ export default function HomeScreen() {
             <TouchableOpacity style={styles.drawButton} onPress={navigateToDrawing}>
               <Text style={styles.drawButtonText}>🎨 Doodle of the Day</Text>
             </TouchableOpacity>
+            {wordOfDayStreak > 0 && (
+              <>
+                <View style={styles.streakBadge}>
+                  <Text style={styles.streakEmoji}>🔥</Text>
+                  <Text style={styles.streakNumberInside}>{wordOfDayStreak}</Text>
+                </View>
+                <View style={styles.bonusBadge}>
+                  <Text style={styles.bonusText}>+{Math.round((getStreakMultiplier(wordOfDayStreak) - 1) * 100)}%</Text>
+                </View>
+              </>
+            )}
             <TouchableOpacity 
               style={styles.infoIcon} 
               onPress={() => showGameModeInfo('Doodle of the Day')}
@@ -467,6 +593,17 @@ export default function HomeScreen() {
             <TouchableOpacity style={styles.doodleHuntButton} onPress={navigateToDoodleHunt}>
               <Text style={styles.doodleHuntButtonText}>🔍 Doodle Hunt Daily</Text>
             </TouchableOpacity>
+            {doodleHuntStreak > 0 && (
+              <>
+                <View style={styles.streakBadge}>
+                  <Text style={styles.streakEmoji}>🔥</Text>
+                  <Text style={styles.streakNumberInside}>{doodleHuntStreak}</Text>
+                </View>
+                <View style={styles.bonusBadge}>
+                  <Text style={styles.bonusText}>+{Math.round((getStreakMultiplier(doodleHuntStreak) - 1) * 100)}%</Text>
+                </View>
+              </>
+            )}
             <TouchableOpacity 
               style={styles.infoIcon} 
               onPress={() => showGameModeInfo('Doodle Hunt Daily')}
@@ -614,13 +751,25 @@ const styles = StyleSheet.create({
   dailySection: {
     marginBottom: 20,
     alignItems: 'center',
+    backgroundColor: '#F8F9FA',
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: '#E1E8ED',
+    padding: 20,
+    marginHorizontal: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 15,
+    color: '#1A1A1A',
+    marginBottom: 16,
     textAlign: 'center',
+    letterSpacing: 0.5,
   },
   divider: {
     width: 200,
@@ -701,6 +850,45 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: -30,
     zIndex: 10,
+  },
+  streakBadge: {
+    position: 'absolute',
+    left: -80,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  streakEmoji: {
+    fontSize: 32,
+  },
+  streakNumberInside: {
+    position: 'absolute',
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    textShadowColor: 'rgba(0, 0, 0, 0.9)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 4,
+  },
+  bonusBadge: {
+    position: 'absolute',
+    left: -80,
+    top: 50,
+    backgroundColor: '#FF6B35',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    zIndex: 11,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 5,
+  },
+  bonusText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#FFF',
   },
   duelFriendButton: {
     backgroundColor: '#FF6B6B',

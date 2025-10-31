@@ -21,6 +21,8 @@ import MultiplayerDrawingScreen from '../SCREENS/MultiplayerDrawingScreen';
 import MultiplayerResultsScreen from '../SCREENS/MultiplayerResultsScreen';
 import MultiplayerScreen from '../SCREENS/MultiplayerScreen';
 import MyDrawingsScreen from '../SCREENS/MyDrawingsScreen';
+import RouletteDrawingScreen from '../SCREENS/RouletteDrawingScreen';
+import RouletteResultsScreen from '../SCREENS/RouletteResultsScreen';
 import SimpleSignInTest from '../SCREENS/SimpleSignInTest';
 import TestNavigationScreen from '../SCREENS/TestNavigationScreen';
 import UserCheckScreen from '../SCREENS/UserCheckScreen';
@@ -92,6 +94,8 @@ function AuthNavigator() {
             <Stack.Screen name="Multiplayer" component={MultiplayerScreen} />
             <Stack.Screen name="MultiplayerDrawing" component={MultiplayerDrawingScreen} />
             <Stack.Screen name="MultiplayerResults" component={MultiplayerResultsScreen} />
+            <Stack.Screen name="RouletteDrawing" component={RouletteDrawingScreen} />
+            <Stack.Screen name="RouletteResults" component={RouletteResultsScreen} />
             <Stack.Screen name="MyDrawings" component={MyDrawingsScreen} />
             <Stack.Screen name="Username" component={UsernameScreen} />
             <Stack.Screen name="DatabaseTest" component={DatabaseTestScreen} />

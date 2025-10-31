@@ -4,6 +4,7 @@ import { Alert, Animated, Dimensions, PanResponder, ScrollView, StyleSheet, Text
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { useDispatch, useSelector } from 'react-redux';
+import DrawingToolsPalette from '../COMPONENTS/DrawingToolsPalette';
 import { useRewardedAd } from '../COMPONENTS/RewardedAd';
 import { RootState } from '../store';
 import { setUserInfo } from '../store/slices/authSlice';
@@ -1268,7 +1269,9 @@ export default function DoodleHuntDashScreen() {
         clearCanvas();
         
         // Load guesses for the new level (should be empty initially)
-        await loadGameGuesses(gameId);
+        if (gameId) {
+          await loadGameGuesses(gameId);
+        }
         
         console.log('Advanced to level:', nextLevel.new_level, 'Word:', nextLevel.new_word);
       }
@@ -1668,129 +1671,17 @@ export default function DoodleHuntDashScreen() {
         
         {/* Tools Panel */}
         <View style={styles.sideControls}>
-          <View style={styles.controlsContent}>
-            <View style={styles.colorControls}>
-              <Text style={styles.controlLabel}>Colors</Text>
-              <View style={styles.colorRow}>
-                <TouchableOpacity
-                  style={[
-                    styles.colorButton, 
-                    { backgroundColor: '#000000' }, 
-                    brushColor === '#000000' && styles.selectedColor,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]}
-                  onPress={() => !gameWon && !gameLost && setBrushColor('#000000')}
-                  disabled={gameWon || gameLost}
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.colorButton, 
-                    { backgroundColor: '#FF0000' }, 
-                    brushColor === '#FF0000' && styles.selectedColor,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]}
-                  onPress={() => !gameWon && !gameLost && setBrushColor('#FF0000')}
-                  disabled={gameWon || gameLost}
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.colorButton, 
-                    { backgroundColor: '#00FF00' }, 
-                    brushColor === '#00FF00' && styles.selectedColor,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]}
-                  onPress={() => !gameWon && !gameLost && setBrushColor('#00FF00')}
-                  disabled={gameWon || gameLost}
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.colorButton, 
-                    { backgroundColor: '#0000FF' }, 
-                    brushColor === '#0000FF' && styles.selectedColor,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]}
-                  onPress={() => !gameWon && !gameLost && setBrushColor('#0000FF')}
-                  disabled={gameWon || gameLost}
-                />
-              </View>
-            </View>
-
-            <View style={styles.sizeControls}>
-              <Text style={styles.controlLabel}>Size</Text>
-              <TouchableOpacity
-                style={[
-                  styles.sizeButton, 
-                  brushSize === 2 && styles.selectedSize,
-                  (gameWon || gameLost) && styles.disabledControl
-                ]}
-                onPress={() => !gameWon && !gameLost && setBrushSize(2)}
-                disabled={gameWon || gameLost}
-              >
-                <Text style={styles.sizeButtonText}>Small</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.sizeButton, 
-                  brushSize === 3 && styles.selectedSize,
-                  (gameWon || gameLost) && styles.disabledControl
-                ]}
-                onPress={() => !gameWon && !gameLost && setBrushSize(3)}
-                disabled={gameWon || gameLost}
-              >
-                <Text style={styles.sizeButtonText}>Medium</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.sizeButton, 
-                  brushSize === 5 && styles.selectedSize,
-                  (gameWon || gameLost) && styles.disabledControl
-                ]}
-                onPress={() => !gameWon && !gameLost && setBrushSize(5)}
-                disabled={gameWon || gameLost}
-              >
-                <Text style={styles.sizeButtonText}>Large</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.actionControls}>
-              <Text style={styles.controlLabel}>Tools</Text>
-              <View style={styles.actionButtons}>
-                <TouchableOpacity
-                  style={[
-                    styles.actionButton, 
-                    isEraseMode && styles.selectedAction,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]}
-                  onPress={() => !gameWon && !gameLost && setIsEraseMode(!isEraseMode)}
-                  disabled={gameWon || gameLost}
-                >
-                  <Text style={styles.actionButtonText}>
-                    {isEraseMode ? '✏️ Draw' : '🧽 Erase'}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[
-                    styles.actionButton,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]} 
-                  onPress={() => !gameWon && !gameLost && undoLastStroke()}
-                  disabled={gameWon || gameLost}
-                >
-                  <Text style={styles.actionButtonText}>Undo</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[
-                    styles.actionButton,
-                    (gameWon || gameLost) && styles.disabledControl
-                  ]} 
-                  onPress={() => !gameWon && !gameLost && clearCanvas()}
-                  disabled={gameWon || gameLost}
-                >
-                  <Text style={styles.actionButtonText}>Clear</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
+          <DrawingToolsPalette
+            brushColor={brushColor}
+            onColorChange={setBrushColor}
+            brushSize={brushSize}
+            onSizeChange={setBrushSize}
+            isEraseMode={isEraseMode}
+            onToggleEraseMode={() => setIsEraseMode(!isEraseMode)}
+            onUndo={undoLastStroke}
+            onClear={clearCanvas}
+            disabled={gameWon || gameLost}
+          />
         </View>
       </Animated.View>
       )}

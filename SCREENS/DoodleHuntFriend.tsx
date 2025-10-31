@@ -49,6 +49,7 @@ export default function DoodleHuntFriend() {
   const [previousAttempts, setPreviousAttempts] = useState<Array<{guess: string, score: number}>>([]);
   const [gameId, setGameId] = useState<string | null>(null);
   const [category, setCategory] = useState<string>('');
+  const [turnHistory, setTurnHistory] = useState<Array<{ turnNumber: number; username: string; aiGuess: string; similarity: number; wasCorrect: boolean }>>([]);
   const [showHint, setShowHint] = useState<boolean>(false);
   
   // Drawing state
@@ -63,6 +64,12 @@ export default function DoodleHuntFriend() {
   const [isControlsExpanded, setIsControlsExpanded] = useState(false);
   const [bothPlayersCompleted, setBothPlayersCompleted] = useState(false);
   const [showResultsButton, setShowResultsButton] = useState(false);
+  const [turnNumber, setTurnNumber] = useState<number>(1);
+  const [strokeIndex, setStrokeIndex] = useState<number>(0);
+  const [lastOpponentStrokeIndex, setLastOpponentStrokeIndex] = useState<number>(0);
+  const [isMyTurn, setIsMyTurn] = useState<boolean>(false);
+  const [currentTurnUsername, setCurrentTurnUsername] = useState<string>('');
+  const [opponentOnline, setOpponentOnline] = useState<boolean>(false);
 
   const loadDuelData = async () => {
     try {
@@ -144,14 +151,92 @@ export default function DoodleHuntFriend() {
         setCategory(wordData.category);
       }
 
-      // Create or load doodle_hunt_duel game
-      await createOrLoadDoodleHuntDuelGame();
+      // Set current turn based on duel.turn_order if present (new system)
+      try {
+        if (Array.isArray(duel.turn_order) && duel.turn_order.length > 0 && typeof duel.current_turn_index === 'number') {
+          const turnUserId = duel.turn_order[duel.current_turn_index];
+          setIsMyTurn(turnUserId === user.id);
+          if (typeof duel.roulette_turn_number === 'number' && duel.roulette_turn_number > 0) {
+            setTurnNumber(duel.roulette_turn_number);
+            setLastOpponentStrokeIndex(0);
+          }
+          if (turnUserId) {
+            const { data: turnUserProfile } = await supabase
+              .from('profiles')
+              .select('username')
+              .eq('id', turnUserId)
+              .single();
+            if (turnUserProfile?.username) {
+              setCurrentTurnUsername(turnUserProfile.username);
+            }
+          }
+        }
+      } catch (e) {
+        console.log('Failed to set turn state from duel record', e);
+      }
+
+      // Load previous turns (new system)
+      await loadTurnHistory();
+
+      // If duel already completed (e.g., on re-entry at end), go to results
+      if (duel.status === 'completed') {
+        (navigation as any).navigate('DuelFriendResults', { duelId });
+      }
 
     } catch (error) {
       console.error('Error loading duel data:', error);
       Alert.alert('Error', 'Failed to load duel data');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // SVG safety helpers (match multiplayer roulette behavior)
+  const isValidSvgPath = (value: any): boolean => {
+    if (typeof value !== 'string') return false;
+    if (!value) return false;
+    if (value.includes('NaN') || value.includes('Infinity')) return false;
+    // Allow only M/L/Q commands with numbers, dots, commas, dashes and spaces
+    return /^M[0-9\.,\-\sLQ]+$/.test(value);
+  };
+
+  const isValidStrokeWidth = (w: any): boolean => {
+    if (typeof w !== 'number') return false;
+    return w >= 0.5 && w <= 50;
+  };
+
+  // Load previous turns (new system)
+  const loadTurnHistory = async () => {
+    try {
+      const { data: turns, error } = await supabase
+        .from('doodle_hunt_friend_turns')
+        .select('turn_number, ai_guess, similarity_score, user_id')
+        .eq('duel_id', duelId)
+        .order('turn_number', { ascending: true });
+      if (error) {
+        console.log('Error loading turn history', error);
+        return;
+      }
+      const rows = turns || [];
+      const userIds = Array.from(new Set(rows.map((t: any) => t.user_id).filter(Boolean)));
+      let idToUsername: Record<string, string> = {};
+      if (userIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, username')
+          .in('id', userIds as any);
+        (profiles || []).forEach((p: any) => { idToUsername[p.id] = p.username || 'Unknown'; });
+      }
+      const history = rows.map((t: any) => ({
+        turnNumber: t.turn_number,
+        username: idToUsername[t.user_id] || 'Unknown',
+        aiGuess: t.ai_guess || '',
+        similarity: t.similarity_score || 0,
+        wasCorrect: (t.similarity_score || 0) >= 100
+      }));
+      setTurnHistory(history);
+    } catch (e) {
+      console.log('loadTurnHistory failed', e);
     }
   };
 
@@ -320,6 +405,213 @@ export default function DoodleHuntFriend() {
     }
   }, [duelId]);
 
+  // Subscribe to realtime turn changes on duels (new system)
+  useEffect(() => {
+    if (!duelId) return;
+
+    const channel = supabase
+      .channel(`duel-turns-${duelId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'duels',
+          filter: `id=eq.${duelId}`
+        },
+        async (payload) => {
+          try {
+            const updated: any = payload.new;
+            if (!updated) return;
+            // Only process for doodleHunt
+            if (updated.gamemode !== 'doodleHunt') return;
+            // If duel ended (turn limit or 100%), navigate to results
+            if (updated.status === 'completed') {
+              (navigation as any).navigate('DuelFriendResults', { duelId });
+              return;
+            }
+            if (Array.isArray(updated.turn_order) && updated.turn_order.length > 0 && typeof updated.current_turn_index === 'number') {
+              const { data: { user } } = await supabase.auth.getUser();
+              const turnUserId = updated.turn_order[updated.current_turn_index];
+              setIsMyTurn(!!user && turnUserId === user.id);
+              if (typeof updated.roulette_turn_number === 'number' && updated.roulette_turn_number > 0) {
+                setTurnNumber(updated.roulette_turn_number);
+                // Clear canvas and reset when turn advances
+                setPaths([]);
+                setCurrentPath('');
+                setStrokeIndex(0);
+                setLastOpponentStrokeIndex(0);
+              }
+              if (turnUserId) {
+                const { data: turnUserProfile } = await supabase
+                  .from('profiles')
+                  .select('username')
+                  .eq('id', turnUserId)
+                  .single();
+                if (turnUserProfile?.username) {
+                  setCurrentTurnUsername(turnUserProfile.username);
+                }
+              }
+            }
+          } catch (e) {
+            console.log('Failed processing duel turn update', e);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [duelId]);
+
+  // Subscribe to completed turns to refresh history (new system)
+  useEffect(() => {
+    if (!duelId) return;
+    const channel = supabase
+      .channel(`duel-turns-history-${duelId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'doodle_hunt_friend_turns',
+          filter: `duel_id=eq.${duelId}`
+        },
+        async () => {
+          await loadTurnHistory();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [duelId]);
+
+  // Subscribe to real-time opponent strokes for current duel (new system)
+  useEffect(() => {
+    if (!duelId) return;
+    const channel = supabase
+      .channel(`duel-strokes-${duelId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'doodle_hunt_friend_strokes',
+          filter: `duel_id=eq.${duelId}`
+        },
+        (payload) => {
+          try {
+            if (isMyTurn) return; // Only render opponent strokes
+            const row: any = payload.new;
+            if (!row || row.turn_number !== turnNumber) return;
+            let stroke = row.stroke_data;
+            if (!stroke) return;
+            // Handle explicit clear signal (object or stringified)
+            if (typeof stroke === 'string') {
+              try { stroke = JSON.parse(stroke); } catch {}
+            }
+            if (stroke && typeof stroke === 'object' && stroke.clear === true) {
+              setPaths([]);
+              setCurrentPath('');
+              setLastOpponentStrokeIndex(0);
+              return;
+            }
+            // Enforce monotonic index AFTER clear handling so clear always gets through
+            if (typeof row.stroke_index === 'number') {
+              if (row.stroke_index <= lastOpponentStrokeIndex) return; // duplicate/out-of-order
+              setLastOpponentStrokeIndex(row.stroke_index);
+            }
+            if (typeof stroke === 'string') {
+              try { stroke = JSON.parse(stroke); } catch { return; }
+            }
+            if (!stroke || !stroke.path || !stroke.color || typeof stroke.strokeWidth !== 'number') return;
+            if (typeof stroke.path !== 'string') return;
+            if (stroke.path.includes('NaN') || stroke.path.includes('Infinity')) return;
+            if (!/^M[0-9\.,\-\sLQ]+$/.test(stroke.path)) return;
+            if (stroke.strokeWidth < 0.5 || stroke.strokeWidth > 50) return;
+            setPaths(prev => [...prev, { path: String(stroke.path), color: String(stroke.color), strokeWidth: Number(stroke.strokeWidth) }]);
+          } catch (e) {
+            console.log('Error handling stroke payload', e);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'doodle_hunt_friend_strokes',
+          filter: `duel_id=eq.${duelId}`
+        },
+        (payload) => {
+          try {
+            // When remote clears current turn strokes, mirror locally if it's not our turn
+            if (isMyTurn) return;
+            const row: any = payload.old;
+            if (!row || row.turn_number !== turnNumber) return;
+            setPaths([]);
+            setCurrentPath('');
+            setLastOpponentStrokeIndex(0);
+          } catch (e) {
+            console.log('Error handling stroke delete payload', e);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [duelId, turnNumber, isMyTurn]);
+
+  // Presence: show green dot if opponent is also on this screen
+  useEffect(() => {
+    let presenceChannel: any;
+    const setupPresence = async () => {
+      try {
+        // Need both duelData and current user to establish presence
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!duelId || !duelData || !user) return;
+
+        const myUserId = user.id;
+        const opponentId = duelData.isChallenger ? duelData.opponent_id : duelData.challenger_id;
+
+        presenceChannel = supabase
+          .channel(`duel-presence-${duelId}`, {
+            config: { presence: { key: myUserId } }
+          })
+          .on('presence', { event: 'sync' }, () => {
+            try {
+              const state = presenceChannel.presenceState() as Record<string, any[]>;
+              const onlineUserIds = Object.keys(state || {});
+              setOpponentOnline(onlineUserIds.includes(opponentId));
+            } catch (e) {
+              console.log('Presence sync parse error', e);
+            }
+          })
+          .subscribe(async (status: any) => {
+            if (status === 'SUBSCRIBED') {
+              try {
+                await presenceChannel.track({ online_at: new Date().toISOString() });
+              } catch (e) {
+                console.log('Presence track failed', e);
+              }
+            }
+          });
+      } catch (e) {
+        console.log('Presence setup failed', e);
+      }
+    };
+
+    setupPresence();
+    return () => {
+      if (presenceChannel) supabase.removeChannel(presenceChannel);
+    };
+  }, [duelId, duelData]);
+
   // Subscribe to realtime changes on doodle_hunt_duel table
   useEffect(() => {
     if (!duelId) return;
@@ -367,162 +659,120 @@ export default function DoodleHuntFriend() {
   }, [duelId]);
 
   const submitDrawing = async () => {
-    if (!duelData || isSubmitting || gameWon || gameLost) return;
-
+    if (!duelData || isSubmitting) return;
     try {
       setIsSubmitting(true);
 
-      // Compress the canvas to base64 using centralized compression utility
-      const base64 = await compressImageToBase64(canvasRef);
-
-      // Get the current session for authorization
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
-        Alert.alert('Error', 'You must be logged in to analyze your drawing.');
+        Alert.alert('Error', 'You must be logged in.');
         return;
       }
 
-      // Call the AI guessing function (same as daily Doodle Hunt)
+      // Compress canvas screenshot for AI guess
+      const base64 = await compressImageToBase64(canvasRef);
+
+      // Generate simple SVG string from current paths for storage
+      const svgString = `<svg width="${screenWidth - 40}" height="${screenWidth - 100}" xmlns="http://www.w3.org/2000/svg">`
+        + paths
+          .filter(p => isValidSvgPath(p?.path) && isValidStrokeWidth(p?.strokeWidth))
+          .map(p => `<path d="${p.path}" stroke="${typeof p.color === 'string' ? p.color : '#000000'}" stroke-width="${p.strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round" />`)
+        + `</svg>`;
+
+      // Upload SVG
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = `dhf-${duelId}-turn${turnNumber}-${timestamp}.svg`;
+      const { error: uploadError } = await supabase.storage
+        .from('drawings')
+        .upload(filename, svgString, { contentType: 'image/svg+xml', upsert: false });
+      if (uploadError) {
+        Alert.alert('Error', 'Failed to save drawing.');
+        return;
+      }
+      const { data: urlData } = supabase.storage.from('drawings').getPublicUrl(filename);
+
+      // AI guess
       const guessResponse = await fetch("https://qxqduzzqcivosdauqpis.functions.supabase.co/guess-drawing", {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({
-          pngBase64: base64,
-          targetWord: duelData.word
-        })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+        body: JSON.stringify({ pngBase64: base64, targetWord: duelData.word })
       });
-
       if (!guessResponse.ok) {
-        console.error('AI Guess API error:', guessResponse.status, guessResponse.statusText);
-        Alert.alert('Error', 'Failed to analyze your drawing. Please try again.');
+        Alert.alert('Error', 'Failed to analyze drawing.');
         return;
       }
+      const guessData = await guessResponse.json();
+      const aiGuess = guessData.guess || 'unknown';
+      const similarityScore = guessData.similarity || 0;
 
-      const responseText = await guessResponse.text();
-      let parsed;
-      try {
-        parsed = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error('Failed to parse AI response:', parseError);
-        console.log('Raw response:', responseText);
-        Alert.alert('Error', 'Failed to parse AI response. Please try again.');
-        return;
-      }
-
-      const guess = parsed.guess || parsed.word || 'unknown';
-      const score = parsed.similarity || parsed.score || 0;
-      setAiGuess(guess);
-      setSimilarityScore(score);
-      setAttempts(prev => prev + 1);
-
-      // Save the guess to the database using RPC function
-      const { error: saveError } = await supabase.rpc('add_doodle_hunt_duel_guess', {
-        game_uuid: gameId,
-        guess_num: attempts + 1,
-        target_word_text: duelData.word,
-        ai_guess_text: guess,
-        similarity_num: score
+      // Submit turn through edge function; backend will advance or complete
+      const { data: submitData, error: submitError } = await supabase.functions.invoke('matchmaking', {
+        body: {
+          action: 'submit_doodle_hunt_friend_turn',
+          duelId,
+          svgUrl: urlData.publicUrl,
+          pathsJson: { paths },
+          aiGuess,
+          similarityScore
+        }
       });
-
-      if (saveError) {
-        console.error('Error saving guess:', saveError);
-        Alert.alert('Error', 'Failed to save your guess. Please try again.');
+      if (submitError || !submitData?.success) {
+        const msg = submitError?.message || submitData?.error || 'Failed to submit turn';
+        Alert.alert('Error', msg);
         return;
       }
 
-      // Update previous attempts
-      setPreviousAttempts(prev => [...prev, { guess, score }]);
-
-      // Check if won or lost and complete game if needed
-      if (score >= 80) {
-        setGameWon(true);
-        // Complete the doodle_hunt_duel game
-        console.log('Completing game as won with score:', score);
-        console.log('GameId:', gameId);
-        console.log('DuelId:', duelId);
-        const { error: completeError } = await supabase.rpc('complete_doodle_hunt_duel_game', {
-          game_uuid: gameId,
-          game_status: 'completed',
-          final_score_num: score
-        });
-        
-        if (completeError) {
-          console.error('Error completing game:', completeError);
-          Alert.alert('Error', 'Failed to complete game. Please try again.');
-          return;
-        }
-        
-        console.log('Game completed successfully');
-        
-        // Check if both players have completed
-        const bothCompleted = await checkBothPlayersCompleted();
-        console.log('Both players completed after win:', bothCompleted);
-        
-        if (bothCompleted) {
-          console.log('Navigating to results screen...');
-          Alert.alert('Congratulations!', `You won! The AI guessed "${guess}" with ${score}% accuracy.`, [
-            { text: 'View Results', onPress: () => (navigation as any).navigate('DuelFriendResults', { duelId }) }
-          ]);
-        } else {
-          console.log('Waiting for opponent to finish...');
-          Alert.alert('Congratulations!', `You won! The AI guessed "${guess}" with ${score}% accuracy. Waiting for your opponent to finish...`);
-        }
-      } else if (attempts + 1 >= maxAttempts) {
-        setGameLost(true);
-        // Complete the doodle_hunt_duel game
-        console.log('Completing game as lost with score:', score);
-        console.log('GameId:', gameId);
-        console.log('DuelId:', duelId);
-        const { error: completeError } = await supabase.rpc('complete_doodle_hunt_duel_game', {
-          game_uuid: gameId,
-          game_status: 'completed',
-          final_score_num: score
-        });
-        
-        if (completeError) {
-          console.error('Error completing game:', completeError);
-          Alert.alert('Error', 'Failed to complete game. Please try again.');
-          return;
-        }
-        
-        console.log('Game completed successfully');
-        
-        // Check if both players have completed
-        const bothCompleted = await checkBothPlayersCompleted();
-        console.log('Both players completed after loss:', bothCompleted);
-        
-        if (bothCompleted) {
-          console.log('Navigating to results screen...');
-          Alert.alert('Game Over', `You lost! The word was "${duelData.word}". Your best score was ${Math.max(...previousAttempts.map(a => a.score), score)}%`, [
-            { text: 'View Results', onPress: () => (navigation as any).navigate('DuelFriendResults', { duelId }) }
-          ]);
-        } else {
-          console.log('Waiting for opponent to finish...');
-          Alert.alert('Game Over', `You lost! The word was "${duelData.word}". Your best score was ${Math.max(...previousAttempts.map(a => a.score), score)}%. Waiting for your opponent to finish...`);
-        }
-      } else {
-        Alert.alert(
-          'Guess Submitted!',
-          `The AI guessed "${guess}" with ${score}% accuracy. Try again to get closer to "${duelData.word}"!`
-        );
-        // Clear canvas only for non-terminal attempts
-        clearCanvas();
-      }
+      // Show quick feedback
+      Alert.alert('Turn submitted', `AI: "${aiGuess}" (${similarityScore}%)`);
+      // Refresh history immediately in case realtime is delayed
+      await loadTurnHistory();
+      // Turn should advance via duels realtime update
     } catch (error) {
-      console.error('Error submitting drawing:', error);
-      Alert.alert('Error', 'Failed to submit drawing. Please try again.');
+      console.error('Error submitting turn:', error);
+      Alert.alert('Error', 'Failed to submit turn.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
 
-  const clearCanvas = () => {
-    setPaths([]);
-    setCurrentPath('');
+  const clearCanvas = async () => {
+    try {
+      // Only current drawer can clear and broadcast deletion
+      if (isMyTurn) {
+        // Delete all strokes for this duel and current turn from server so opponent view clears
+        const { error: delError } = await supabase
+          .from('doodle_hunt_friend_strokes')
+          .delete()
+          .eq('duel_id', duelId)
+          .eq('turn_number', turnNumber);
+        if (delError) {
+          console.log('Failed to delete strokes for clear:', delError);
+        }
+
+        // Additionally send a lightweight "clear" signal as an INSERT to ensure opponent clears immediately
+        try {
+          const { error: insertError } = await supabase
+            .from('doodle_hunt_friend_strokes')
+            .insert({
+              duel_id: duelId,
+              turn_number: turnNumber,
+              stroke_index: 0,
+              stroke_data: { clear: true }
+            });
+          if (insertError) {
+            console.log('Failed to insert clear signal stroke:', insertError);
+          }
+        } catch (e) {
+          console.log('Error sending clear signal', e);
+        }
+      }
+    } catch (e) {
+      console.log('Error clearing strokes remotely', e);
+    } finally {
+      setPaths([]);
+      setCurrentPath('');
+    }
   };
 
   const undoLastPath = () => {
@@ -533,8 +783,8 @@ export default function DoodleHuntFriend() {
   const brushSizes = [2, 3, 5];
 
   const PanResponder = require('react-native').PanResponder.create({
-    onStartShouldSetPanResponder: () => !gameWon && !gameLost && !bothPlayersCompleted,
-    onMoveShouldSetPanResponder: () => !gameWon && !gameLost && !bothPlayersCompleted,
+    onStartShouldSetPanResponder: () => isMyTurn && !gameWon && !gameLost && !bothPlayersCompleted,
+    onMoveShouldSetPanResponder: () => isMyTurn && !gameWon && !gameLost && !bothPlayersCompleted,
     onPanResponderGrant: (evt: GestureResponderEvent) => {
       // Don't allow drawing if game is completed or waiting for opponent
       if (gameWon || gameLost || bothPlayersCompleted) return;
@@ -588,16 +838,38 @@ export default function DoodleHuntFriend() {
         setCurrentPath(prev => `${prev} L${locationX},${locationY}`);
       }
     },
-    onPanResponderRelease: () => {
+    onPanResponderRelease: async () => {
       if (!isDrawing) return;
       setIsDrawing(false);
       
       if (!isEraseMode && currentPath) {
+        // Validate stroke before adding/broadcasting (similar to roulette)
+        if (!isValidSvgPath(currentPath)) return;
+        if (!isValidStrokeWidth(brushSize)) return;
         setPaths(prev => [...prev, { 
           path: currentPath, 
           color: brushColor, 
           strokeWidth: brushSize 
         }]);
+
+        // Broadcast stroke to opponent (new system)
+        try {
+          if (!isMyTurn) return;
+          const strokeData = { path: currentPath, color: brushColor, strokeWidth: brushSize };
+          const nextIndex = strokeIndex + 1;
+          setStrokeIndex(nextIndex);
+          await supabase.functions.invoke('matchmaking', {
+            body: {
+              action: 'add_doodle_hunt_friend_stroke',
+              duelId,
+              turnNumber,
+              strokeData,
+              strokeIndex: nextIndex
+            }
+          });
+        } catch (e) {
+          console.log('Failed to broadcast stroke', e);
+        }
       }
       
       setCurrentPath('');
@@ -630,40 +902,44 @@ export default function DoodleHuntFriend() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Text style={styles.backButtonText}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>DoodleHunt vs @{opponentUsername}</Text>
-        {!(gameWon || gameLost) && (
-          <TouchableOpacity
-            style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
-            onPress={submitDrawing}
-            disabled={isSubmitting}
-          >
-            <Text style={styles.submitButtonText}>
-              {isSubmitting ? 'Submitting...' : 'Submit'}
-            </Text>
+      <View style={styles.headerContainer}>
+        <View style={styles.topRow}>
+          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+            <Text style={styles.backButtonText}>← Back</Text>
           </TouchableOpacity>
-        )}
-        
-        {(() => {
-          console.log('showResultsButton state:', showResultsButton);
-          return null;
-        })()}
-        
-        {showResultsButton && (
-          <TouchableOpacity
-            style={styles.resultsButton}
-            onPress={() => {
-              console.log('=== Navigating to DuelFriendResults ===');
-              console.log('DoodleHuntFriend: Navigating to results with duelId:', duelId);
-              (navigation as any).navigate('DuelFriendResults', { duelId });
-            }}
-          >
-            <Text style={styles.resultsButtonText}>View Results</Text>
-          </TouchableOpacity>
-        )}
+          {!(gameWon || gameLost) && (
+            isMyTurn ? (
+              <TouchableOpacity
+                style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
+                onPress={submitDrawing}
+                disabled={isSubmitting}
+              >
+                <Text style={styles.submitButtonText}>
+                  {isSubmitting ? 'Submitting...' : 'Submit'}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.submitButton}>
+                <Text style={styles.submitButtonText}>
+                  {currentTurnUsername ? `⏳ ${currentTurnUsername}'s Turn` : '⏳ Opponent\'s Turn'}
+                </Text>
+              </View>
+            )
+          )}
+
+          {showResultsButton && (
+            <TouchableOpacity
+              style={styles.resultsButton}
+              onPress={() => (navigation as any).navigate('DuelFriendResults', { duelId })}
+            >
+              <Text style={styles.resultsButtonText}>View Results</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        <View style={styles.titleRow}>
+          <Text style={styles.title}>DoodleHunt vs @{opponentUsername}</Text>
+          {opponentOnline && <View style={styles.onlineDot} />}
+        </View>
       </View>
 
       <ScrollView 
@@ -699,7 +975,7 @@ export default function DoodleHuntFriend() {
             </View>
           )}
           
-          <Text style={styles.attemptsText}>Attempts: {attempts}/{maxAttempts}</Text>
+          <Text style={styles.attemptsText}>Turn {turnNumber}/10</Text>
           
           {(gameWon || gameLost) && !bothPlayersCompleted && (
             <View style={styles.waitingContainer}>
@@ -714,29 +990,38 @@ export default function DoodleHuntFriend() {
             </View>
           )}
 
-          <View style={styles.canvasContainer}>
+          <View style={[styles.canvasContainer, isMyTurn && styles.canvasMyTurnGlow]}>
             <View
               ref={canvasRef}
               style={[styles.canvas, (gameWon || gameLost || bothPlayersCompleted) && styles.canvasDisabled]}
               {...PanResponder.panHandlers}
             >
               <Svg style={styles.svg}>
-                {paths.map((pathData, index) => (
-                  <Path
-                    key={index}
-                    d={pathData.path}
-                    stroke={pathData.color}
-                    strokeWidth={pathData.strokeWidth}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    fill="none"
-                  />
-                ))}
-                {currentPath && (
+                {paths.map((pathData, index) => {
+                  // Validate before rendering to avoid rnsvgparser errors
+                  if (!isValidSvgPath(pathData?.path)) {
+                    console.warn('Skipping invalid path at index', index);
+                    return null;
+                  }
+                  const safeColor = typeof pathData?.color === 'string' ? pathData.color : '#000000';
+                  const safeWidth = isValidStrokeWidth(pathData?.strokeWidth) ? pathData.strokeWidth : 3;
+                  return (
+                    <Path
+                      key={index}
+                      d={pathData.path}
+                      stroke={safeColor}
+                      strokeWidth={safeWidth}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      fill="none"
+                    />
+                  );
+                })}
+                {isValidSvgPath(currentPath) && (
                   <Path
                     d={currentPath}
                     stroke={brushColor}
-                    strokeWidth={brushSize}
+                    strokeWidth={isValidStrokeWidth(brushSize) ? brushSize : 3}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     fill="none"
@@ -746,36 +1031,30 @@ export default function DoodleHuntFriend() {
             </View>
           </View>
 
-          {/* Previous Attempts - match Doodle Hunt Daily */}
-          {previousAttempts.length > 0 && (
+          {/* Previous Turns (new system) */}
+          {turnHistory.length > 0 && (
             <View style={styles.guessesSection}>
-              <Text style={styles.guessesTitle}>Previous Attempts</Text>
+              <Text style={styles.guessesTitle}>Top Guesses</Text>
               <View style={styles.previousGuesses}>
-                {previousAttempts
-                  .slice()
-                  .sort((a, b) => b.score - a.score)
-                  .map((attempt, index) => {
-                    let barColor = '#E57373'; // dull red
-                    if (attempt.score === 100) {
-                      barColor = '#64B5F6'; // dull blue for 100%
-                    } else if (attempt.score >= 80) {
-                      barColor = '#81C784'; // dull green
-                    } else if (attempt.score >= 60) {
-                      barColor = '#FFE082'; // dull yellow (amber)
-                    } else if (attempt.score >= 40) {
-                      barColor = '#FFB74D'; // dull orange
-                    }
-                    const widthPercent = attempt.score <= 0 ? 0 : attempt.score;
-                    return (
-                      <View key={index} style={styles.guessItem}>
-                        <View style={styles.progressBarContainer}>
-                          <View style={[styles.progressBar, { width: `${widthPercent}%`, backgroundColor: barColor }]} />
-                          <Text style={styles.guessWordInside}>{attempt.guess}</Text>
-                          <Text style={styles.guessScoreOutside}>{attempt.score}%</Text>
-                        </View>
+                {[...turnHistory]
+                  .sort((a, b) => b.similarity - a.similarity)
+                  .map((t, index) => {
+                  let barColor = '#E57373';
+                  if (t.similarity === 100) barColor = '#64B5F6';
+                  else if (t.similarity >= 80) barColor = '#81C784';
+                  else if (t.similarity >= 60) barColor = '#FFE082';
+                  else if (t.similarity >= 40) barColor = '#FFB74D';
+                  const widthPercent = t.similarity <= 0 ? 0 : t.similarity;
+                  return (
+                    <View key={index} style={styles.guessItem}>
+                      <View style={styles.progressBarContainer}>
+                        <View style={[styles.progressBar, { width: `${widthPercent}%`, backgroundColor: barColor }]} />
+                        <Text style={styles.guessWordInside}>{t.username}: {t.aiGuess}</Text>
+                        <Text style={styles.guessScoreOutside}>{t.similarity}%</Text>
                       </View>
-                    );
-                  })}
+                    </View>
+                  );
+                })}
               </View>
             </View>
           )}
@@ -817,25 +1096,25 @@ export default function DoodleHuntFriend() {
         
         {/* Tools Panel */}
         <View style={styles.sideControls}>
-          <View style={styles.controlsContent}>
+            <View style={[styles.controlsContent, !isMyTurn && styles.controlsDisabled]}>
             <View style={styles.colorControls}>
               <Text style={styles.controlLabel}>Colors</Text>
               <View style={styles.colorRow}>
-                <TouchableOpacity
+                  <TouchableOpacity
                   style={[styles.colorButton, { backgroundColor: '#000000' }, brushColor === '#000000' && styles.selectedColor]}
-                  onPress={() => setBrushColor('#000000')}
+                    onPress={() => { if (!isMyTurn) return; setBrushColor('#000000'); }}
                 />
                 <TouchableOpacity
                   style={[styles.colorButton, { backgroundColor: '#FF0000' }, brushColor === '#FF0000' && styles.selectedColor]}
-                  onPress={() => setBrushColor('#FF0000')}
+                    onPress={() => { if (!isMyTurn) return; setBrushColor('#FF0000'); }}
                 />
                 <TouchableOpacity
                   style={[styles.colorButton, { backgroundColor: '#00FF00' }, brushColor === '#00FF00' && styles.selectedColor]}
-                  onPress={() => setBrushColor('#00FF00')}
+                    onPress={() => { if (!isMyTurn) return; setBrushColor('#00FF00'); }}
                 />
                 <TouchableOpacity
                   style={[styles.colorButton, { backgroundColor: '#0000FF' }, brushColor === '#0000FF' && styles.selectedColor]}
-                  onPress={() => setBrushColor('#0000FF')}
+                    onPress={() => { if (!isMyTurn) return; setBrushColor('#0000FF'); }}
                 />
               </View>
             </View>
@@ -844,19 +1123,19 @@ export default function DoodleHuntFriend() {
               <Text style={styles.controlLabel}>Size</Text>
               <TouchableOpacity
                 style={[styles.sizeButton, brushSize === 2 && styles.selectedSize]}
-                onPress={() => setBrushSize(2)}
+                  onPress={() => { if (!isMyTurn) return; setBrushSize(2); }}
               >
                 <Text style={styles.sizeButtonText}>Small</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.sizeButton, brushSize === 3 && styles.selectedSize]}
-                onPress={() => setBrushSize(3)}
+                  onPress={() => { if (!isMyTurn) return; setBrushSize(3); }}
               >
                 <Text style={styles.sizeButtonText}>Medium</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.sizeButton, brushSize === 5 && styles.selectedSize]}
-                onPress={() => setBrushSize(5)}
+                  onPress={() => { if (!isMyTurn) return; setBrushSize(5); }}
               >
                 <Text style={styles.sizeButtonText}>Large</Text>
               </TouchableOpacity>
@@ -867,16 +1146,16 @@ export default function DoodleHuntFriend() {
               <View style={styles.actionButtons}>
                 <TouchableOpacity
                   style={[styles.actionButton, isEraseMode && styles.selectedAction]}
-                  onPress={() => setIsEraseMode(!isEraseMode)}
+                    onPress={() => { if (!isMyTurn) return; setIsEraseMode(!isEraseMode); }}
                 >
                   <Text style={styles.actionButtonText}>
                     {isEraseMode ? '✏️ Draw' : '🧽 Erase'}
                   </Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.actionButton} onPress={undoLastPath}>
+                  <TouchableOpacity style={styles.actionButton} onPress={() => { if (!isMyTurn) return; undoLastPath(); }}>
                   <Text style={styles.actionButtonText}>Undo</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.actionButton} onPress={clearCanvas}>
+                  <TouchableOpacity style={styles.actionButton} onPress={() => { if (!isMyTurn) return; clearCanvas(); }}>
                   <Text style={styles.actionButtonText}>Clear</Text>
                 </TouchableOpacity>
               </View>
@@ -900,15 +1179,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 20,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  headerContainer: {
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 20,
     paddingVertical: 10,
-    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
+  },
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    gap: 10,
   },
   backButton: {
     padding: 8,
@@ -922,6 +1205,20 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#333',
     fontFamily: 'Nunito_700Bold',
+    textAlign: 'center',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  onlineDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#28A745',
+    marginLeft: 6,
   },
   submitButton: {
     backgroundColor: '#007AFF',
@@ -1043,6 +1340,15 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#E0E0E0',
   },
+  canvasMyTurnGlow: {
+    borderColor: '#34C759',
+    shadowColor: '#34C759',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 10,
+    // Optional Android shadow via elevation (not true glow but helps)
+    elevation: 6,
+  },
   canvas: {
     flex: 1,
     backgroundColor: '#FFFFFF',
@@ -1160,6 +1466,9 @@ const styles = StyleSheet.create({
   controlsContent: {
     padding: 15,
     width: 200,
+  },
+  controlsDisabled: {
+    opacity: 0.5,
   },
   colorControls: {
     marginBottom: 15,

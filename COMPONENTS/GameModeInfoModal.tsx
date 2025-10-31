@@ -1,11 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import {
-  Modal,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    Modal,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 
 interface GameModeInfoModalProps {
@@ -17,43 +17,61 @@ interface GameModeInfoModalProps {
 const gameModeInfo = {
   'Doodle Hunt Daily': {
     title: '🔍 Doodle Hunt Daily',
-    description: 'A daily drawing challenge where you create artwork based on a specific word or theme. Each day brings a new creative prompt to test your artistic skills!',
+    description: 'Guess the secret word by drawing! AI tries to identify what you drew. Build your streak for huge XP bonuses!',
     features: [
-      'Daily word prompts',
-      'Creative freedom',
-      'Share your artwork',
-      'See other artists\' interpretations'
-    ]
+      'Daily word challenge',
+      'AI guessing system',
+      'Earn XP and level up'
+    ],
+    hasStreaks: true
   },
   'Doodle of the Day': {
     title: '🎨 Doodle of the Day',
-    description: 'Create a drawing based on the word of the day. This is your personal creative space to express yourself through art!',
+    description: 'Create a drawing based on the word of the day. Build your streak to earn massive XP bonuses!',
     features: [
       'Daily word inspiration',
       'Personal drawing space',
-      'Save your creations',
-      'Track your progress'
-    ]
+      'Earn XP and level up'
+    ],
+    hasStreaks: true
+  },
+  'Doodle Hunt Dash': {
+    title: '🎯 Doodle Hunt Dash',
+    description: 'Solo challenge mode where you race against yourself! Draw and guess words that get progressively harder as you level up. How far can you go?',
+    features: [
+      'Solo gameplay - no waiting',
+      'Progressive difficulty',
+      'Each level gets harder',
+      'Unlimited attempts',
+      'Track your best level',
+      'No daily limit - play anytime!'
+    ],
+    hasStreaks: false
   },
   'Duel a Friend': {
     title: '⚔️ Duel a Friend',
-    description: 'Challenge a friend to a drawing duel! Both players draw the same word, and the community votes on who created the best interpretation.',
+    description: 'Challenge your friends to a drawing duel! Send a challenge, they accept, and you both compete to see who draws better.',
     features: [
-      'Challenge friends',
-      'Same word for both players',
-      'Community voting',
-      'Real-time notifications'
-    ]
+      'Send challenges to friends',
+      'Get notified when accepted',
+      '🎨 Doodle Duel: Both draw the same word - best drawing wins!',
+      '🔍 Doodle Hunt: Both guess a secret word by drawing - fastest/best guess wins!',
+      'Earn XP for wins and losses'
+    ],
+    hasStreaks: false
   },
   'Multiplayer': {
     title: '🎮 Multiplayer',
-    description: 'Join live multiplayer drawing sessions where multiple players compete in real-time drawing challenges with voting and scoring.',
+    description: 'Play online against other players in real-time! Get matched with opponents and compete in different game modes.',
     features: [
-      'Real-time multiplayer',
-      'Live voting system',
-      'Quick rounds',
-      'Leaderboards'
-    ]
+      'Play vs real players online',
+      'Choose 2 or 4 player matches',
+      '🎲 Roulette Mode: Take turns drawing while others watch. AI guesses each drawing. First to 100% wins or highest score after 5 turns per player!',
+      '🎨 Doodle Mode: Everyone draws the same word simultaneously. Best drawing wins!',
+      'Real-time matchmaking',
+      'Earn XP for wins and losses'
+    ],
+    hasStreaks: false
   },
   'My Drawings': {
     title: '📚 My Drawings',
@@ -63,7 +81,8 @@ const gameModeInfo = {
       'Organize by date',
       'Share your favorites',
       'Track your improvement'
-    ]
+    ],
+    hasStreaks: false
   }
 };
 
@@ -112,6 +131,36 @@ export default function GameModeInfoModal({
                   </View>
                 ))}
               </View>
+
+              {/* Streak Bonuses (if applicable) */}
+              {info.hasStreaks && (
+                <View style={styles.streakSection}>
+                  <Text style={styles.streakTitle}>🔥 Daily Streak Bonuses:</Text>
+                  <View style={styles.streakMilestones}>
+                    <View style={styles.milestone}>
+                      <Text style={styles.milestoneDay}>3</Text>
+                      <Text style={styles.milestoneBonus}>+25%</Text>
+                    </View>
+                    <View style={styles.milestone}>
+                      <Text style={styles.milestoneDay}>7</Text>
+                      <Text style={styles.milestoneBonus}>+50%</Text>
+                    </View>
+                    <View style={styles.milestone}>
+                      <Text style={styles.milestoneDay}>14</Text>
+                      <Text style={styles.milestoneBonus}>+75%</Text>
+                    </View>
+                    <View style={styles.milestoneSpecial}>
+                      <Text style={styles.milestoneDay}>30</Text>
+                      <Text style={styles.milestoneBonusSpecial}>2x</Text>
+                    </View>
+                    <View style={styles.milestoneSpecial}>
+                      <Text style={styles.milestoneDay}>100</Text>
+                      <Text style={styles.milestoneBonusSpecial}>3x</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.streakNote}>Play daily to keep your streak alive!</Text>
+                </View>
+              )}
 
               {/* Close Button */}
               <View style={styles.closeSection}>
@@ -225,5 +274,66 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#fff',
+  },
+  streakSection: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: '#FFF5E1',
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+  },
+  streakTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  streakMilestones: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: 12,
+  },
+  milestone: {
+    alignItems: 'center',
+    backgroundColor: '#FFF',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#FF6B35',
+    minWidth: 50,
+  },
+  milestoneSpecial: {
+    alignItems: 'center',
+    backgroundColor: '#FFD700',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#FF6B35',
+    minWidth: 50,
+  },
+  milestoneDay: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 2,
+  },
+  milestoneBonus: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FF6B35',
+  },
+  milestoneBonusSpecial: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#D4AF37',
+  },
+  streakNote: {
+    fontSize: 11,
+    color: '#666',
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
 });

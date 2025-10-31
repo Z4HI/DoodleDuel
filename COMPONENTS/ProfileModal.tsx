@@ -1,13 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import {
-  Alert,
-  Modal,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    Alert,
+    Modal,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from 'react-native';
+import { getCurrentLevelProgress, getTierInfo } from '../utils/tierUtils';
 
 interface ProfileModalProps {
   visible: boolean;
@@ -16,6 +17,9 @@ interface ProfileModalProps {
   userInfo?: {
     username?: string;
     email?: string;
+    level?: number;
+    total_xp?: number;
+    tier?: number;
   } | null;
 }
 
@@ -57,22 +61,102 @@ export default function ProfileModal({
             {/* Header */}
             <View style={styles.header}>
               <Text style={styles.title}>Profile</Text>
-              <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-                <Ionicons name="close" size={24} color="#666" />
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <Text style={{ fontSize: 12, color: '#999', marginTop: 6 }}>
+                  Lv {userInfo?.level || 1} | {userInfo?.total_xp || 0} XP
+                </Text>
+                <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+                  <Ionicons name="close" size={24} color="#666" />
+                </TouchableOpacity>
+              </View>
             </View>
 
             {/* User Info */}
             <View style={styles.userInfoSection}>
-              <View style={styles.avatarContainer}>
-                <Ionicons name="person" size={40} color="#007AFF" />
-              </View>
+              {(() => {
+                const tier = userInfo?.tier || 1;
+                const tierInfo = getTierInfo(tier);
+                
+                // Create tier border style
+                const borderStyle: any = {
+                  borderWidth: tierInfo.borderWidth,
+                  borderColor: tierInfo.color,
+                  borderRadius: 40,
+                  padding: 4,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  marginBottom: 12,
+                };
+
+                // Add glow for higher tiers
+                if (tierInfo.hasGlow && tierInfo.glowColor) {
+                  borderStyle.shadowColor = tierInfo.glowColor;
+                  borderStyle.shadowOffset = { width: 0, height: 0 };
+                  borderStyle.shadowOpacity = 1;
+                  borderStyle.shadowRadius = 10;
+                  borderStyle.elevation = 8;
+                }
+
+                return (
+                  <View style={borderStyle}>
+                    {tierInfo.hasGradient && tierInfo.secondaryColor && (
+                      <View style={{
+                        position: 'absolute',
+                        top: 2,
+                        left: 2,
+                        right: 2,
+                        bottom: 2,
+                        borderRadius: 36,
+                        borderWidth: 2,
+                        borderColor: tierInfo.secondaryColor,
+                      }} />
+                    )}
+                    <View style={styles.avatarContainer}>
+                      <Ionicons name="person" size={50} color="#007AFF" />
+                    </View>
+                  </View>
+                );
+              })()}
+
               {userInfo?.username && (
                 <Text style={styles.username}>@{userInfo.username}</Text>
               )}
               {userInfo?.email && (
                 <Text style={styles.email}>{userInfo.email}</Text>
               )}
+              
+              {/* Tier & Level Display */}
+              <View style={styles.tierSection}>
+                <View style={styles.tierBadge}>
+                  <Text style={[styles.tierText, { color: getTierInfo(userInfo?.tier || 1).color }]}>
+                    {getTierInfo(userInfo?.tier || 1).name}
+                  </Text>
+                  <Text style={styles.levelText}>Level {userInfo?.level || 1}</Text>
+                </View>
+                
+                {/* XP Progress Bar */}
+                <View style={styles.xpSection}>
+                  {(() => {
+                    const totalXP = userInfo?.total_xp || 0;
+                    const level = userInfo?.level || 1;
+                    const tier = userInfo?.tier || 1;
+                    const progress = getCurrentLevelProgress(totalXP, level);
+                    return (
+                      <>
+                        <View style={styles.xpBarContainer}>
+                          <View style={[styles.xpBarFill, { 
+                            width: `${progress.progressPercent}%`,
+                            backgroundColor: getTierInfo(tier).color
+                          }]} />
+                        </View>
+                        <Text style={styles.xpText}>
+                          {progress.currentLevelXP} / {progress.xpForNextLevel} XP
+                        </Text>
+                      </>
+                    );
+                  })()}
+                </View>
+              </View>
             </View>
 
             {/* Settings Options */}
@@ -175,13 +259,12 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f0f0f0',
   },
   avatarContainer: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 70,
+    height: 70,
+    borderRadius: 35,
     backgroundColor: '#f0f0f0',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
   },
   username: {
     fontSize: 18,
@@ -192,6 +275,47 @@ const styles = StyleSheet.create({
   email: {
     fontSize: 14,
     color: '#666',
+  },
+  tierSection: {
+    marginTop: 16,
+    width: '100%',
+    alignItems: 'center',
+  },
+  tierBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  tierText: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  levelText: {
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '600',
+  },
+  xpSection: {
+    width: '100%',
+    alignItems: 'center',
+  },
+  xpBarContainer: {
+    width: '100%',
+    height: 20,
+    backgroundColor: '#E0E0E0',
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  xpBarFill: {
+    height: '100%',
+    borderRadius: 10,
+  },
+  xpText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
   },
   settingsSection: {
     paddingVertical: 8,

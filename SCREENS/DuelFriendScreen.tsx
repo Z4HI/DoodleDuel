@@ -33,6 +33,7 @@ interface DuelInvitation {
   challenger_username: string;
   opponent_username: string;
   isChallenger: boolean; // Whether current user is the challenger
+  winner_id?: string | null;
 }
 
 export default function DuelFriendScreen({ route }: any) {
@@ -243,6 +244,7 @@ export default function DuelFriendScreen({ route }: any) {
           difficulty,
           gamemode,
           status,
+          winner_id,
           created_at,
           challenger:challenger_id(username),
           opponent:opponent_id(username)
@@ -268,8 +270,23 @@ export default function DuelFriendScreen({ route }: any) {
         created_at: duel.created_at,
         challenger_username: (duel.challenger as any)?.username || 'Unknown',
         opponent_username: (duel.opponent as any)?.username || 'Unknown',
-        isChallenger: duel.challenger_id === currentUser.id
+        isChallenger: duel.challenger_id === currentUser.id,
+        winner_id: duel.winner_id
       }));
+
+      // Sort: in_progress first, then duel_sent, then completed; within each, newest first
+      const statusRank: Record<'in_progress' | 'duel_sent' | 'completed', number> = {
+        in_progress: 0,
+        duel_sent: 1,
+        completed: 2,
+      };
+      transformedDuels.sort((a, b) => {
+        const rankDiff = statusRank[a.status] - statusRank[b.status];
+        if (rankDiff !== 0) return rankDiff;
+        const aTime = Date.parse(a.created_at || '');
+        const bTime = Date.parse(b.created_at || '');
+        return (isNaN(bTime) ? 0 : bTime) - (isNaN(aTime) ? 0 : aTime);
+      });
 
       return { success: true, data: transformedDuels };
     } catch (error) {
@@ -397,16 +414,10 @@ export default function DuelFriendScreen({ route }: any) {
         return;
       }
 
-      // Update duel status to in_progress and set accepted to true
-      const { error } = await supabase
-        .from('duels')
-        .update({ 
-          status: 'in_progress', 
-          accepted: true, 
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', duelId)
-        .eq('opponent_id', user.id);
+      // Use the accept_duel RPC function which handles turn initialization for Doodle Hunt
+      const { error } = await supabase.rpc('accept_duel', {
+        duel_uuid: duelId
+      });
 
       if (error) {
         console.error('Error accepting duel:', error);
@@ -898,7 +909,14 @@ export default function DuelFriendScreen({ route }: any) {
 
   const renderDuelInvitationItem = ({ item }: { item: DuelInvitation }) => (
     <TouchableOpacity 
-      style={styles.duelInvitationItem}
+      style={[
+        styles.duelInvitationItem,
+        item.status === 'completed'
+          ? (item.winner_id && item.winner_id === (userInfo?.id || '')
+              ? styles.completedWin
+              : styles.completedLoss)
+          : null
+      ]}
       onPress={() => handleDuelInvitationPress(item)}
       disabled={item.status !== 'in_progress' && item.status !== 'completed'}
       activeOpacity={(item.status === 'in_progress' || item.status === 'completed') ? 0.7 : 1}
@@ -909,9 +927,6 @@ export default function DuelFriendScreen({ route }: any) {
             ? `${item.gamemode === 'doodleDuel' ? 'DoodleDuel' : 'DoodleHunt'} sent to ${item.opponent_username}`
             : `${item.challenger_username} challenged you to ${item.gamemode === 'doodleDuel' ? 'DoodleDuel' : 'DoodleHunt'}`
           }
-        </Text>
-        <Text style={styles.duelInvitationDetails}>
-          Word: {item.word} • Difficulty: {item.difficulty}
         </Text>
         <Text style={styles.duelInvitationTime}>
           {new Date(item.created_at).toLocaleDateString()}
@@ -1558,6 +1573,14 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 3.84,
     elevation: 5,
+  },
+  completedWin: {
+    backgroundColor: '#E8F5E9',
+    borderColor: '#4CAF50',
+  },
+  completedLoss: {
+    backgroundColor: '#FFEBEE',
+    borderColor: '#F44336',
   },
   duelInvitationInfo: {
     marginBottom: 12,
