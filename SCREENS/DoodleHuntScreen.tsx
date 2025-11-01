@@ -38,7 +38,8 @@ export default function DoodleHuntScreen() {
   const [gameLost, setGameLost] = useState(false);
   const [aiGuess, setAiGuess] = useState<string>('');
   const [similarityScore, setSimilarityScore] = useState<number>(0);
-  const [previousAttempts, setPreviousAttempts] = useState<Array<{guess: string, score: number, hint: string, hintUsed: boolean, guessId?: string}>>([]);
+  const [position, setPosition] = useState<number>(0);
+  const [previousAttempts, setPreviousAttempts] = useState<Array<{guess: string, score: number, position: number, hint: string, hintUsed: boolean, guessId?: string}>>([]);
   
   // Drawing state
   const [paths, setPaths] = useState<Array<{ path: string; color: string; strokeWidth: number }>>([]);
@@ -740,7 +741,7 @@ export default function DoodleHuntScreen() {
     try {
       const { data: guesses, error } = await supabase
         .from('guesses')
-        .select('id, guess_number, ai_guess_word, similarity_score, hint, hint_used')
+        .select('id, guess_number, ai_guess_word, similarity_score, hint, hint_used, position')
         .eq('game_id', gameUuid)
         .order('guess_number', { ascending: true });
 
@@ -757,6 +758,7 @@ export default function DoodleHuntScreen() {
         const previousAttemptsData = guesses.map(guess => ({
           guess: guess.ai_guess_word,
           score: guess.similarity_score,
+          position: guess.position || 0, // Use position from DB, default to 0 if null
           hint: guess.hint || '',
           hintUsed: guess.hint_used || false,
           guessId: guess.id
@@ -767,6 +769,7 @@ export default function DoodleHuntScreen() {
         const latestGuess = guesses[guesses.length - 1];
         setAiGuess(latestGuess.ai_guess_word);
         setSimilarityScore(latestGuess.similarity_score);
+        setPosition(latestGuess.position || 0);
 
         // Check if game should be completed
         if (latestGuess.similarity_score >= 100) {
@@ -800,7 +803,7 @@ export default function DoodleHuntScreen() {
     }
   };
 
-  const addGuessToDatabase = async (guess: string, score: number, hint: string) => {
+  const addGuessToDatabase = async (guess: string, score: number, hint: string, position: number = 0) => {
     if (!gameId) return null;
 
     try {
@@ -811,7 +814,7 @@ export default function DoodleHuntScreen() {
         target_word_text: secretWord,
         ai_guess_text: guess,
         similarity_num: score,
-        hint_text: hint
+        position_num: position || null
       });
 
       if (error) {
@@ -1046,9 +1049,10 @@ export default function DoodleHuntScreen() {
       // Handle the AI response
       const aiGuess = guessData.guess || guessData.word || 'unknown';
       const similarityScore = guessData.similarity || guessData.score || 0;
+      const position = guessData.position || 0;
       const hint = guessData.hint || '';
       
-      handleGuessResult(aiGuess, similarityScore, hint);
+      handleGuessResult(aiGuess, similarityScore, position, hint);
       
     } catch (error) {
       console.error('Error submitting drawing:', error);
@@ -1058,19 +1062,20 @@ export default function DoodleHuntScreen() {
     }
   };
 
-  const handleGuessResult = async (guess: string, score: number, hint: string) => {
+  const handleGuessResult = async (guess: string, score: number, position: number, hint: string) => {
     setAiGuess(guess);
     setSimilarityScore(score);
+    setPosition(position);
     
     // Add to previous attempts with temporary guessId (will be updated after database call)
     const tempGuessId = `temp_${Date.now()}`;
-    setPreviousAttempts(prev => [...prev, { guess, score, hint, hintUsed: false, guessId: tempGuessId }]);
+    setPreviousAttempts(prev => [...prev, { guess, score, position, hint, hintUsed: false, guessId: tempGuessId }]);
     
     // Check if this will be the last guess before adding to database
     const willBeLastGuess = guessesLeft <= 1;
     
     // Add guess to database (this will decrement guesses_left in the database)
-    const dbGuessId = await addGuessToDatabase(guess, score, hint);
+    const dbGuessId = await addGuessToDatabase(guess, score, hint, position);
     
     // Update the previous attempts with the real database ID
     if (dbGuessId) {
@@ -1528,13 +1533,23 @@ export default function DoodleHuntScreen() {
       {/* Current AI Guess - Small display above canvas */}
       {aiGuess && (
         <View style={styles.currentGuessSmall}>
-          <Text style={styles.guessTextSmall}>AI: "{aiGuess}" ({similarityScore}%)</Text>
+          <Text style={styles.guessTextSmall}>AI: "{aiGuess}" ({similarityScore}% | #{position})</Text>
         </View>
       )}
 
       {/* Completion Message */}
       {gameWon && (
-        <XPBanner xpEarned={xpEarned} leveledUp={leveledUp} newLevel={newLevel} />
+        <>
+          <XPBanner xpEarned={xpEarned} leveledUp={leveledUp} newLevel={newLevel} />
+          <View style={styles.completionContainer}>
+            <Text style={styles.completionMessage}>
+              🎉 Congratulations! You solved it! The word was "{secretWord}".
+            </Text>
+            <TouchableOpacity style={styles.shareButton} onPress={handleShare}>
+              <Text style={styles.shareButtonText}>📤 Share Results</Text>
+            </TouchableOpacity>
+          </View>
+        </>
       )}
 
       {gameLost && (
@@ -1650,7 +1665,7 @@ export default function DoodleHuntScreen() {
                           </TouchableOpacity>
                         )}
                         
-                        <Text style={styles.guessScoreOutside}>{attempt.score}%</Text>
+                        <Text style={styles.guessScoreOutside}>{attempt.score}% | #{attempt.position}</Text>
                       </View>
                     </View>
                   );

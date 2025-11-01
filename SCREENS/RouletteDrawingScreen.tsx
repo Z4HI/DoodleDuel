@@ -33,6 +33,7 @@ interface TurnHistory {
   username: string;
   aiGuess: string;
   similarity: number;
+  position?: number; // Optional for backwards compatibility
   wasCorrect: boolean;
 }
 
@@ -383,6 +384,7 @@ export default function RouletteDrawingScreen() {
               username: username,
               aiGuess: turn.ai_guess,
               similarity: turn.similarity_score,
+              position: turn.position || 0, // Use position from DB, default to 0 if null
               wasCorrect: turn.was_correct
             }]);
             
@@ -718,8 +720,9 @@ export default function RouletteDrawingScreen() {
       const guessData = await guessResponse.json();
       const aiGuess = guessData.guess || 'unknown';
       const similarityScore = guessData.similarity || 0;
+      const position = guessData.position || 0;
       
-      console.log('AI guessed:', aiGuess, 'Score:', similarityScore);
+      console.log('AI guessed:', aiGuess, 'Score:', similarityScore, 'Position:', position);
 
       const pathsJson = { paths };
 
@@ -731,7 +734,8 @@ export default function RouletteDrawingScreen() {
           svgUrl: urlData.publicUrl,
           pathsJson: pathsJson,
           aiGuess: aiGuess,
-          similarityScore: similarityScore
+          similarityScore: similarityScore,
+          position: position
         }
       });
 

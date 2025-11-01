@@ -210,7 +210,7 @@ export default function DoodleHuntFriend() {
     try {
       const { data: turns, error } = await supabase
         .from('doodle_hunt_friend_turns')
-        .select('turn_number, ai_guess, similarity_score, user_id')
+        .select('turn_number, ai_guess, similarity_score, user_id, position')
         .eq('duel_id', duelId)
         .order('turn_number', { ascending: true });
       if (error) {
@@ -232,6 +232,7 @@ export default function DoodleHuntFriend() {
         username: idToUsername[t.user_id] || 'Unknown',
         aiGuess: t.ai_guess || '',
         similarity: t.similarity_score || 0,
+        position: t.position || 0, // Use position from DB, default to 0 if null
         wasCorrect: (t.similarity_score || 0) >= 100
       }));
       setTurnHistory(history);
@@ -249,7 +250,7 @@ export default function DoodleHuntFriend() {
       }
       const { data: guesses, error } = await supabase
         .from('doodle_hunt_duel_guesses')
-        .select('guess_number, ai_guess_word, similarity_score')
+        .select('guess_number, ai_guess_word, similarity_score, position')
         .eq('game_id', gId)
         .order('guess_number', { ascending: true });
 
@@ -260,12 +261,13 @@ export default function DoodleHuntFriend() {
 
       if (guesses && guesses.length > 0) {
         setAttempts(guesses.length);
-        setPreviousAttempts(guesses.map(g => ({ guess: g.ai_guess_word, score: g.similarity_score })));
+        setPreviousAttempts(guesses.map(g => ({ guess: g.ai_guess_word, score: g.similarity_score, position: g.position || 0 })));
         
         // Set the latest guess as current
         const latestGuess = guesses[guesses.length - 1];
         setAiGuess(latestGuess.ai_guess_word);
         setSimilarityScore(latestGuess.similarity_score);
+        setPosition(latestGuess.position || 0);
         
         // Check if game is won or lost
         if (latestGuess.similarity_score >= 80) {
@@ -704,6 +706,7 @@ export default function DoodleHuntFriend() {
       const guessData = await guessResponse.json();
       const aiGuess = guessData.guess || 'unknown';
       const similarityScore = guessData.similarity || 0;
+      const position = guessData.position || 0;
 
       // Submit turn through edge function; backend will advance or complete
       const { data: submitData, error: submitError } = await supabase.functions.invoke('matchmaking', {
@@ -713,7 +716,8 @@ export default function DoodleHuntFriend() {
           svgUrl: urlData.publicUrl,
           pathsJson: { paths },
           aiGuess,
-          similarityScore
+          similarityScore,
+          position
         }
       });
       if (submitError || !submitData?.success) {
@@ -723,7 +727,7 @@ export default function DoodleHuntFriend() {
       }
 
       // Show quick feedback
-      Alert.alert('Turn submitted', `AI: "${aiGuess}" (${similarityScore}%)`);
+      Alert.alert('Turn submitted', `AI: "${aiGuess}" (${similarityScore}% | #${position})`);
       // Refresh history immediately in case realtime is delayed
       await loadTurnHistory();
       // Turn should advance via duels realtime update
@@ -1050,7 +1054,7 @@ export default function DoodleHuntFriend() {
                       <View style={styles.progressBarContainer}>
                         <View style={[styles.progressBar, { width: `${widthPercent}%`, backgroundColor: barColor }]} />
                         <Text style={styles.guessWordInside}>{t.username}: {t.aiGuess}</Text>
-                        <Text style={styles.guessScoreOutside}>{t.similarity}%</Text>
+                        <Text style={styles.guessScoreOutside}>{t.similarity}%{t.position ? ` | #${t.position}` : ''}</Text>
                       </View>
                     </View>
                   );

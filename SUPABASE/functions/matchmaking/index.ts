@@ -890,7 +890,7 @@ async function handleGetRouletteStatus(supabaseClient: any, userId: string, matc
 
 async function handleSubmitRouletteTurn(supabaseClient: any, userId: string, requestBody: any) {
   try {
-    const { matchId, svgUrl, pathsJson, aiGuess, similarityScore } = requestBody
+    const { matchId, svgUrl, pathsJson, aiGuess, similarityScore, position } = requestBody
 
     if (!matchId || pathsJson === undefined || !aiGuess || similarityScore === undefined) {
       return new Response(
@@ -911,7 +911,8 @@ async function handleSubmitRouletteTurn(supabaseClient: any, userId: string, req
       paths_json: pathsJson,
       ai_guess_text: aiGuess,
       similarity_num: similarityScore,
-      calling_user_id: userId
+      calling_user_id: userId,
+      position_num: position || null
     })
 
     if (error) {
@@ -1362,7 +1363,7 @@ async function handleGetDoodleHuntFriendStatus(supabaseClient: any, userId: stri
 
 async function handleSubmitDoodleHuntFriendTurn(supabaseClient: any, userId: string, requestBody: any) {
   try {
-    const { duelId, svgUrl, pathsJson, aiGuess, similarityScore } = requestBody
+    const { duelId, svgUrl, pathsJson, aiGuess, similarityScore, position } = requestBody
 
     if (!duelId || pathsJson === undefined || !aiGuess || similarityScore === undefined) {
       return new Response(
@@ -1381,7 +1382,8 @@ async function handleSubmitDoodleHuntFriendTurn(supabaseClient: any, userId: str
       paths_json: pathsJson,
       ai_guess_text: aiGuess,
       similarity_num: similarityScore,
-      calling_user_id: userId
+      calling_user_id: userId,
+      position_num: position || null
     })
 
     if (error) {

@@ -331,7 +331,7 @@ export default function DuelFriendResults() {
 
         const { data: turns, error: turnsError } = await supabase
           .from('doodle_hunt_friend_turns')
-          .select('user_id, turn_number, ai_guess, similarity_score')
+          .select('user_id, turn_number, ai_guess, similarity_score, position')
           .eq('duel_id', duelId)
           .order('turn_number', { ascending: true });
 
@@ -361,6 +361,7 @@ export default function DuelFriendResults() {
           username: idToUsername[t.user_id] || 'Unknown',
           aiGuess: t.ai_guess || '',
           similarity: t.similarity_score || 0,
+          position: t.position || 0, // Use position from DB, default to 0 if null
           isWinnerTurn: t.user_id === winnerId,
         })).sort((a, b) => a.turnNumber - b.turnNumber);
         setTurnsList(chronologicalTurns);

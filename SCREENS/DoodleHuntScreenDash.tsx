@@ -35,9 +35,12 @@ export default function DoodleHuntDashScreen() {
   const [gameWon, setGameWon] = useState(false);
   const [gameLost, setGameLost] = useState(false);
   const [showNextLevelButton, setShowNextLevelButton] = useState(false);
+  const [justWon, setJustWon] = useState(false); // Track if win just happened (not loaded from DB)
   const [aiGuess, setAiGuess] = useState<string>('');
   const [similarityScore, setSimilarityScore] = useState<number>(0);
-  const [previousAttempts, setPreviousAttempts] = useState<Array<{guess: string, score: number, hint: string, hintUsed: boolean, guessId?: string}>>([]);
+  const [position, setPosition] = useState<number>(0);
+  const [previousAttempts, setPreviousAttempts] = useState<Array<{guess: string, score: number, position: number, hint: string, hintUsed: boolean, guessId?: string}>>([]);
+  const [attemptsExpanded, setAttemptsExpanded] = useState<boolean>(true);
   
   // Drawing state
   const [paths, setPaths] = useState<Array<{ path: string; color: string; strokeWidth: number }>>([]);
@@ -151,17 +154,19 @@ export default function DoodleHuntDashScreen() {
         setGuessesLeft(game.guesses_left);
         setAttempts(game.total_attempts);
         
-        // Load previous guesses for this level
-        await loadGameGuesses(game.game_id);
+        // Load previous guesses for this level (this will set gameWon if there's a winning guess)
+        const hasWinningGuess = await loadGameGuesses(game.game_id);
         
         console.log('Dash game loaded:', {
           level: game.current_level,
           word: game.current_word,
-          guessesLeft: game.guesses_left
+          guessesLeft: game.guesses_left,
+          hasWinningGuess: hasWinningGuess
         });
 
-        // Check if user has 0 guesses left and game is still in progress
-        if (game.guesses_left === 0) {
+        // Check if user has 0 guesses left and game is still in progress (but not if they won)
+        // Use the return value from loadGameGuesses to check for winning guess, not just state
+        if (game.guesses_left === 0 && !hasWinningGuess) {
           console.log('User has 0 guesses left, showing continue options');
           const userTokens = userInfo?.game_tokens || 0;
           
@@ -539,12 +544,13 @@ export default function DoodleHuntDashScreen() {
         setGuessesLeft(activeGame.guesses_left ?? 5);
         console.log('Setting guessesLeft state to:', activeGame.guesses_left ?? 5);
         
-        // Load previous guesses for this game
-        await loadGameGuesses(activeGame.id);
+        // Load previous guesses for this game (this will set gameWon if there's a winning guess)
+        const hasWinningGuess = await loadGameGuesses(activeGame.id);
         
         // Check if user has hit limits and show alert if needed
         // Use the actual guesses_left value from database, not the state
-        if (activeGame.guesses_left === 0) {
+        // But skip if game is already won - use return value from loadGameGuesses for immediate check
+        if (activeGame.guesses_left === 0 && !hasWinningGuess) {
           console.log('User has 0 guesses left, showing continue options');
           const userTokens = userInfo?.game_tokens || 0;
           
@@ -749,7 +755,7 @@ export default function DoodleHuntDashScreen() {
       // Load guesses for current level only
       const { data: guesses, error } = await supabase
         .from('doodle_hunt_dash_guesses')
-        .select('id, guess_number, ai_guess_word, similarity_score, hint, hint_used')
+        .select('id, guess_number, ai_guess_word, similarity_score, hint, hint_used, position')
         .eq('game_id', gameUuid)
         .eq('level', currentLevel)
         .order('guess_number', { ascending: true });
@@ -763,7 +769,7 @@ export default function DoodleHuntDashScreen() {
 
       if (error) {
         console.error('Error loading guesses:', error);
-        return;
+        return false;
       }
 
       if (guesses && guesses.length > 0) {
@@ -776,6 +782,7 @@ export default function DoodleHuntDashScreen() {
         const previousAttemptsData = guesses.map(guess => ({
           guess: guess.ai_guess_word,
           score: guess.similarity_score,
+          position: guess.position || 0, // Use position from DB, default to 0 if null
           hint: guess.hint || '',
           hintUsed: guess.hint_used || false,
           guessId: guess.id,
@@ -788,20 +795,29 @@ export default function DoodleHuntDashScreen() {
         const latestGuess = guesses[guesses.length - 1];
         setAiGuess(latestGuess.ai_guess_word);
         setSimilarityScore(latestGuess.similarity_score);
-        console.log('🎯 Set latest guess:', { aiGuess: latestGuess.ai_guess_word, score: latestGuess.similarity_score });
+        setPosition(latestGuess.position || 0);
+        console.log('🎯 Set latest guess:', { aiGuess: latestGuess.ai_guess_word, score: latestGuess.similarity_score, position: latestGuess.position });
 
-        // Check if game should be completed
-        if (latestGuess.similarity_score >= 100) {
-          console.log('🏆 Game already won, setting completion state');
+        // Check if any guess is a winner (score >= 100) - prevents "Keep Playing?" alert when won
+        const hasWinningGuess = guesses.some(guess => guess.similarity_score >= 100);
+        if (hasWinningGuess) {
+          console.log('🏆 Game already won (loaded from DB), setting completion state');
           setGameWon(true);
           setShowNextLevelButton(true);
-          // Note: Ad won't show here since game was already completed
+          setJustWon(false); // Not a fresh win, just loading completed game
+          // Note: This prevents "Keep Playing?" alert from showing when game is won
+          // Note: Banner won't show because justWon is false
         }
+        
+        // Return whether there's a winning guess so callers can check synchronously
+        return hasWinningGuess;
       } else {
         console.log('📭 No guesses found for current level');
+        return false;
       }
     } catch (error) {
       console.error('Error in loadGameGuesses:', error);
+      return false;
     }
   };
 
@@ -826,7 +842,7 @@ export default function DoodleHuntDashScreen() {
     }
   };
 
-  const addGuessToDatabase = async (guess: string, score: number, hint: string) => {
+  const addGuessToDatabase = async (guess: string, score: number, hint: string, position: number = 0) => {
     if (!gameId) return null;
 
     try {
@@ -837,7 +853,8 @@ export default function DoodleHuntDashScreen() {
         targetWord: secretWord,
         aiGuess: guess,
         score,
-        hint
+        hint,
+        position
       });
 
       // Use the new dash game guess function
@@ -847,7 +864,8 @@ export default function DoodleHuntDashScreen() {
         target_word_text: secretWord,
         ai_guess_text: guess,
         similarity_num: score,
-        hint_text: hint
+        hint_text: hint,
+        position_num: position || null
       });
 
       if (error) {
@@ -1013,9 +1031,10 @@ export default function DoodleHuntDashScreen() {
       // Handle the AI response
       const aiGuess = guessData.guess || guessData.word || 'unknown';
       const similarityScore = guessData.similarity || guessData.score || 0;
+      const position = guessData.position || 0;
       const hint = guessData.hint || '';
       
-      handleGuessResult(aiGuess, similarityScore, hint);
+      handleGuessResult(aiGuess, similarityScore, position, hint);
       
     } catch (error) {
       console.error('Error submitting drawing:', error);
@@ -1025,19 +1044,20 @@ export default function DoodleHuntDashScreen() {
     }
   };
 
-  const handleGuessResult = async (guess: string, score: number, hint: string) => {
+  const handleGuessResult = async (guess: string, score: number, position: number, hint: string) => {
     setAiGuess(guess);
     setSimilarityScore(score);
+    setPosition(position);
     
     // Add to previous attempts with temporary guessId (will be updated after database call)
     const tempGuessId = `temp_${Date.now()}`;
-    setPreviousAttempts(prev => [...prev, { guess, score, hint, hintUsed: false, guessId: tempGuessId }]);
+    setPreviousAttempts(prev => [...prev, { guess, score, position, hint, hintUsed: false, guessId: tempGuessId }]);
     
     // Check if this will be the last guess before adding to database
     const willBeLastGuess = guessesLeft <= 1;
     
     // Add guess to database (this will decrement guesses_left in the database)
-    const dbGuessId = await addGuessToDatabase(guess, score, hint);
+    const dbGuessId = await addGuessToDatabase(guess, score, hint, position);
     
     // Update the previous attempts with the real database ID
     if (dbGuessId) {
@@ -1055,12 +1075,14 @@ export default function DoodleHuntDashScreen() {
     if (score >= 100) {
       setGameWon(true);
       setShowNextLevelButton(true);
+      setJustWon(true); // Mark as fresh win - show banner
       
       // Show success message
       Alert.alert(
         'Level Complete!', 
         `Congratulations! You completed Level ${currentLevel}! The word was "${secretWord}". Your drawing scored ${score}%!`
       );
+      return; // Exit early - don't check for "Keep Playing?" if won
     } else {
       setAttempts(prev => prev + 1);
       
@@ -1260,6 +1282,7 @@ export default function DoodleHuntDashScreen() {
         setSecretWord(nextLevel.new_word);
         setGuessesLeft(nextLevel.new_guesses_left);
         setGameWon(false);
+        setJustWon(false);
         setGameLost(false);
         setShowNextLevelButton(false);
         setAttempts(0);
@@ -1497,16 +1520,18 @@ export default function DoodleHuntDashScreen() {
       {/* Current AI Guess - Small display above canvas */}
       {aiGuess && (
         <View style={styles.currentGuessSmall}>
-          <Text style={styles.guessTextSmall}>AI: "{aiGuess}" ({similarityScore}%)</Text>
+          <Text style={styles.guessTextSmall}>AI: "{aiGuess}" ({similarityScore}% | #{position})</Text>
         </View>
       )}
 
-      {/* Completion Message */}
+      {/* Completion Message - Only show banner if they just won (not when loading completed game) */}
       {gameWon && (
         <View style={styles.completionContainer}>
-          <Text style={styles.completionMessage}>
-            🎉 You've completed Level {currentLevel} in {previousAttempts.length} guesses!
-          </Text>
+          {justWon && (
+            <Text style={styles.completionMessage}>
+              🎉 You've completed Level {currentLevel} in {previousAttempts.length} guesses!
+            </Text>
+          )}
           {showNextLevelButton && (
             <TouchableOpacity 
               style={styles.nextLevelButton}
@@ -1557,16 +1582,29 @@ export default function DoodleHuntDashScreen() {
         styles.scrollWrapper,
         (gameWon || gameLost) && styles.scrollWrapperExpanded
       ]}>
-        <ScrollView style={[
-          styles.scrollContainer,
-          (gameWon || gameLost) && styles.scrollContainerExpanded
-        ]} showsVerticalScrollIndicator={false}>
+        <ScrollView 
+          style={[
+            styles.scrollContainer,
+            (gameWon || gameLost) && styles.scrollContainerExpanded
+          ]} 
+          contentContainerStyle={(gameWon || gameLost) ? styles.scrollContentExpanded : undefined}
+          showsVerticalScrollIndicator={false}>
         {/* Previous Attempts Section */}
         {previousAttempts.length > 0 && (
           <View style={styles.guessesSection}>
-            <Text style={styles.guessesTitle}>Previous Attempts ({previousAttempts.length})</Text>
+            <TouchableOpacity 
+              onPress={() => setAttemptsExpanded(!attemptsExpanded)}
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+            >
+              <Text style={styles.guessesTitle}>Previous Attempts ({previousAttempts.length})</Text>
+              <Text style={styles.expandIcon}>{attemptsExpanded ? '▼' : '▶'}</Text>
+            </TouchableOpacity>
             
-            <View style={styles.previousGuesses}>
+            {attemptsExpanded && (
+            <View style={[
+              styles.previousGuesses,
+              (gameWon || gameLost) && styles.previousGuessesExpanded
+            ]}>
               {previousAttempts
                 .sort((a, b) => b.score - a.score) // Sort by score descending
                 .map((attempt, index) => {
@@ -1624,12 +1662,13 @@ export default function DoodleHuntDashScreen() {
                           </TouchableOpacity>
                         )}
                         
-                        <Text style={styles.guessScoreOutside}>{attempt.score}%</Text>
+                        <Text style={styles.guessScoreOutside}>{attempt.score}% | #{attempt.position}</Text>
                       </View>
                     </View>
                   );
                 })}
             </View>
+            )}
           </View>
         )}
         </ScrollView>
@@ -1706,6 +1745,10 @@ const styles = StyleSheet.create({
   scrollContainerExpanded: {
     maxHeight: undefined,
     flex: 1,
+  },
+  scrollContentExpanded: {
+    flexGrow: 1,
+    paddingBottom: 20,
   },
   loadingContainer: {
     flex: 1,
@@ -1917,12 +1960,18 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#E0E0E0',
   },
+  expandIcon: {
+    fontSize: 16,
+    color: '#666',
+    marginLeft: 8,
+  },
   guessesTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
     marginBottom: 15,
     textAlign: 'center',
+    flex: 1,
   },
   currentGuessSmall: {
     backgroundColor: '#F0F0F0',
@@ -1965,6 +2014,11 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#E0E0E0',
+  },
+  previousGuessesExpanded: {
+    flexShrink: 1,
+    flexGrow: 1,
+    minHeight: 200,
   },
   previousGuessesTitle: {
     fontSize: 16,
